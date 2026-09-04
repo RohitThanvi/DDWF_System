@@ -1,0 +1,30 @@
+# --- API / serving ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+pydantic-settings==2.5.2
+httpx==0.27.2
+python-multipart==0.0.9
+orjson==3.10.7
+
+# --- Inference-side ML/DL (CPU-safe minimal set; add torch+cuda extra for GPU boxes) ---
+torch==2.4.1
+numpy==1.26.4
+xarray==2024.9.0
+zarr==2.18.3
+dask[array]==2024.9.1
+
+# --- Geo / terrain ---
+rasterio==1.3.11
+pyproj==3.6.1
+
+# --- Caching / infra ---
+redis==5.0.8
+cachetools==5.5.0
+
+# --- Observability ---
+prometheus-fastapi-instrumentator==7.0.0
+structlog==24.4.0
+
+# --- Auth ---
+pyjwt==2.9.0

@@ -1,0 +1,64 @@
+# Hydra config for the Global Planetary Engine (SFNO) — Module 2 training run.
+model:
+  in_channels: 86
+  out_channels: 86
+  hidden_channels: 256
+  n_blocks: 12
+  l_max: 180
+  cond_dim: 8
+  sht_backend: harmonics    # true SHT at train time (torch-harmonics)
+  nlat: 721
+  nlon: 1440
+
+data:
+  zarr_store_uri: s3://ddwf-data-lake/era5.zarr
+  train_years: [1979, 2018]
+  val_years: [2019, 2020]
+  test_years: [2021, 2022]
+  climatology_years: [1991, 2020]
+  batch_size: 1              # per-GPU; effective batch via grad accumulation
+  grad_accum_steps: 16
+  num_workers: 8
+
+curriculum:
+  # scheduled sampling: 1-step -> 4-step -> 12-step rollouts
+  stages:
+    - {epochs: 10, rollout_steps: 1}
+    - {epochs: 10, rollout_steps: 4}
+    - {epochs: 20, rollout_steps: 12}
+
+loss:
+  lambda1_rmse: 1.0
+  lambda2_spectral: 0.1
+  lambda3_perceptual: 0.05
+  lambda4_physics: 0.05
+
+optim:
+  name: adamw
+  lr: 2.5e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  scheduler: cosine
+  warmup_steps: 1000
+
+peft:
+  enabled: true
+  base_checkpoint: prithvi_wxc   # or claimax; see docs/TRAINING.md
+  lora_rank: 16
+  lora_target_modules: [spectral.weight, attn.in_proj_weight]
+  freeze_base: true
+
+precision: bf16-mixed
+gradient_checkpointing_every_n_blocks: 2
+strategy: deepspeed_stage_3_offload   # only if <8 GPUs, see docs/TRAINING.md
+
+trainer:
+  max_epochs: 40
+  accelerator: gpu
+  devices: auto
+  log_every_n_steps: 50
+  val_check_interval: 0.25
+
+mlflow:
+  tracking_uri: ./mlruns
+  experiment_name: ddwf-global-engine

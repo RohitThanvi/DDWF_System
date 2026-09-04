@@ -1,0 +1,50 @@
+# Hydra config for the Satellite AOI Downscaling Head — Module 3 training run.
+model:
+  in_channels: 8
+  cond_raster_channels: 8
+  base_channels: 64
+  channel_mults: [1, 2, 4, 8]
+  context_dim: 64
+  time_dim: 256
+
+diffusion:
+  schedule: cosine          # EDM/DDPM-style noise schedule
+  train_timesteps: 1000
+  sampling: ddim
+  sampling_steps_eval: 16   # matches serving-time distilled sampler
+
+data:
+  coarse_source: global_engine_trajectory_cache
+  terrain_source:
+    dem: copernicus_glo30
+    lulc: esa_worldcover
+    lst: modis_lst
+  aoi_patch_size: 256
+  target_resolution_m: [100, 1000]
+  batch_size: 8
+  grad_accum_steps: 4
+  num_workers: 8
+
+implicit_field:
+  enabled: true            # jointly trains TerrainSIREN for zero-shot AOIs
+  siren_omega_0: 30.0
+
+optim:
+  name: adamw
+  lr: 1.0e-4
+  weight_decay: 0.0
+  scheduler: cosine
+  warmup_steps: 500
+
+precision: bf16-mixed
+attention_backend: flash_attention_2
+
+trainer:
+  max_epochs: 100
+  accelerator: gpu
+  devices: auto
+  log_every_n_steps: 50
+
+mlflow:
+  tracking_uri: ./mlruns
+  experiment_name: ddwf-downscaler
