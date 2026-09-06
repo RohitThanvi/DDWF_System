@@ -9,6 +9,8 @@ free/key-less source is wired in; see that module's docstring for why.
 """
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 import torch
 from scipy.ndimage import zoom
@@ -17,8 +19,8 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.data.terrain_sources import (
     STUB_LST_CHANNELS,
-    STUB_LULC_CHANNELS,
     ElevationClient,
+    LandCoverClient,
     slope_aspect_from_elevation,
 )
 from app.models.siren import TerrainSIREN
@@ -34,6 +36,7 @@ class TerrainFusionService:
         self.device = torch.device(self.settings.device)
         self.siren = TerrainSIREN().to(self.device).eval()
         self.elevation_client = ElevationClient()
+        self.lulc_client = LandCoverClient()
 
     @classmethod
     def instance(cls) -> "TerrainFusionService":
@@ -45,13 +48,14 @@ class TerrainFusionService:
         self, bbox: tuple[float, float, float, float], resolution_m: int = 100, target_size: int = 256
     ) -> np.ndarray:
         """Returns (C=8, target_size, target_size): real elevation/slope/
-        aspect from Open-Meteo/Copernicus GLO-90, upsampled from a coarse
-        elevation query grid to `target_size` (DEM is 90m native — genuine
-        detail runs out well before typical AOI target resolutions of
-        100m-1km, which is exactly why the diffusion head exists: it learns
-        to hallucinate plausible sub-DEM-resolution structure rather than
-        just upsampling terrain linearly). LULC/LST channels are zeros
-        (see app/data/terrain_sources.py for why)."""
+        aspect from Open-Meteo/Copernicus GLO-90 and real land-cover class
+        fractions (vegetation/built-up/water/bare-or-snow) from ESA
+        WorldCover 10m, both upsampled/resampled to `target_size` (native
+        DEM/LULC resolution runs out well before typical AOI target
+        resolutions of 100m-1km, which is exactly why the diffusion head
+        exists: it learns to hallucinate plausible sub-native-resolution
+        structure rather than just upsampling terrain linearly). The LST
+        channel is zeros (see app/data/terrain_sources.py for why)."""
         min_lon, min_lat, max_lon, max_lat = bbox
         approx_width_m = abs(max_lon - min_lon) * 111_000 * np.cos(np.radians((min_lat + max_lat) / 2))
         query_grid = min(32, max(4, int(approx_width_m / max(resolution_m, 90))))
@@ -70,16 +74,20 @@ class TerrainFusionService:
         slope_hi = zoom(slope, scale, order=1)
         aspect_hi = zoom(aspect, scale, order=1)
 
-        h, w = elevation_hi.shape[:2]
         elevation_hi, slope_hi, aspect_hi = (
             a[:target_size, :target_size] for a in (elevation_hi, slope_hi, aspect_hi)
         )
 
-        lulc_stub = np.zeros((STUB_LULC_CHANNELS, target_size, target_size), dtype=np.float32)
+        try:
+            lulc_fractions = await asyncio.to_thread(self.lulc_client.fetch_lulc_patch, bbox, target_size)
+        except Exception as exc:
+            log.warning("terrain_fusion.lulc_fetch_failed", error=str(exc))
+            lulc_fractions = np.zeros((4, target_size, target_size), dtype=np.float32)
+
         lst_stub = np.zeros((STUB_LST_CHANNELS, target_size, target_size), dtype=np.float32)
 
         dem_stack = np.stack([elevation_hi, slope_hi, aspect_hi]).astype(np.float32)
-        return np.concatenate([dem_stack, lulc_stub, lst_stub], axis=0)
+        return np.concatenate([dem_stack, lulc_fractions, lst_stub], axis=0)
 
     def implicit_terrain_embedding(self, lat: float, lon: float, raster_feats: np.ndarray) -> np.ndarray:
         """Zero-shot path (Module 3): query the SIREN field directly for

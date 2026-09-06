@@ -41,8 +41,9 @@ How to actually train the downscaler: [`docs/TRAINING.md`](docs/TRAINING.md).
   diffusion U-Net (DDPM/EDM-style) with cross-attention to the coarse
   forecast, distilled DDIM sampler for low-latency serving, plus a SIREN
   implicit terrain field for zero-shot unmapped-AOI inference. Real
-  elevation/slope/aspect terrain data via Open-Meteo's Elevation API
-  (Copernicus GLO-30/90, free, no key); LULC/LST remain documented stubs.
+  elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90) and
+  real land-cover class fractions (ESA WorldCover 10m, read directly off
+  S3, no key); LST remains a documented stub (needs a NASA Earthdata login).
 - **Ensembling (Module 4):** diffusion-seed perturbation aggregated to
   p10/p50/p90 with an explicit low-skill flag past Day 10
 - **Optional upgrade path:** the original SFNO global engine (Module 2) —

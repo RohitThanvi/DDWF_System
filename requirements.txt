@@ -13,6 +13,9 @@ torch==2.4.1
 numpy==1.26.4
 scipy==1.14.1   # slope/aspect derivation + raster resampling in terrain_fusion.py
 
+# --- Real terrain data (app/data/terrain_sources.py) ---
+rasterio==1.3.11   # reads ESA WorldCover LULC COGs directly off S3 via HTTP range requests
+
 # --- Caching / infra ---
 redis==5.0.8
 cachetools==5.5.0
@@ -24,7 +27,7 @@ structlog==24.4.0
 # --- Auth ---
 pyjwt==2.9.0
 
-# NOTE: xarray/zarr/dask/rasterio/pyproj (needed only for the optional
-# SFNO global-engine upgrade path / Zarr data lake) live in
+# NOTE: xarray/zarr/dask/torch-harmonics/pyproj (needed only for the
+# optional SFNO global-engine upgrade path / Zarr data lake) live in
 # requirements-train.txt, not here, to keep the default serving install
 # lean — the default request flow never imports them.

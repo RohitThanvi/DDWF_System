@@ -75,6 +75,14 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
   request (`app/data/external_forecast.py:_grid_points`), building a
   pseudo-raster coarse patch out of point forecasts. This is coarser than a
   true 25km gridded NWP output but free and zero-maintenance.
+- **Terrain reads.** Elevation comes from Open-Meteo's point API the same
+  way. Land cover comes from a genuinely different pattern: ESA WorldCover
+  ships as 3x3-degree Cloud-Optimized GeoTIFFs on a public S3 bucket, and
+  `LandCoverClient` reads only the AOI's windowed bytes via GDAL's
+  `/vsicurl/` driver — no full-tile download despite tiles running into the
+  hundreds of MB. An AOI that straddles a WorldCover tile boundary is
+  approximated using only the tile containing the AOI center; see
+  `LandCoverClient`'s docstring.
 - **Per-AOI caching.** `CoarseForecastService` caches by rounded bbox +
   grid size + horizon, so repeated queries for the same AOI within a
   request burst don't re-hit Open-Meteo.
@@ -86,9 +94,13 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
 ## Known gaps you should close before this is production-real
 
 1. `TerrainFusionService.fetch_raster_patch` now fetches **real**
-   elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90).
-   LULC and LST channels are still documented stubs (zeros) — wire those to
-   ESA WorldCover / MODIS LST once you're ready (see `docs/TRAINING.md`).
+   elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90) and
+   **real** land-cover class fractions — vegetation/built-up/water/bare-
+   or-snow — from ESA WorldCover 10m, read directly off its public S3 COG
+   via HTTP range requests (no download, no key). The LST channel is still
+   a documented stub (zeros) — MODIS LST requires a NASA Earthdata login,
+   a materially different access pattern than the other two free sources;
+   wire it up once that's worth the friction (see `docs/TRAINING.md`).
 2. The downscaler and SIREN terrain field ship with **randomly-initialized
    weights** — `scripts/build_aoi_pairs_manifest.py` +
    `training/train_downscaler.py` now form a real, runnable pipeline to

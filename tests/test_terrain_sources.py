@@ -20,3 +20,53 @@ def test_linear_ramp_has_uniform_positive_slope():
     interior = slope[2:-2, 2:-2]
     assert interior.std() < 1e-3  # uniform slope away from edge effects
     assert interior.mean() > 0
+
+
+def test_worldcover_tile_id_matches_documented_convention():
+    from app.data.terrain_sources import worldcover_tile_id
+
+    # Jaipur, Rajasthan -> falls in the 3x3deg tile with SW corner (24N, 75E)
+    assert worldcover_tile_id(26.9, 75.8) == "N24E075"
+    # Southern hemisphere: ESA's own docs example is "S48E036" for the tile
+    # covering 48S-45S, 36E-39E
+    assert worldcover_tile_id(-46.5, 37.2) == "S48E036"
+    # Western hemisphere
+    assert worldcover_tile_id(51.5, -0.1) == "N51W003"
+
+
+def test_read_lulc_fractions_from_synthetic_raster():
+    """Builds a small in-memory GeoTIFF with known class values and checks
+    that read_lulc_fractions recovers the correct group fractions — no
+    network access needed."""
+    import rasterio
+    from rasterio.transform import from_bounds as transform_from_bounds
+
+    from app.data.terrain_sources import read_lulc_fractions
+
+    # 4x4 raster: left half built-up (50), right half water (80)
+    raw = np.array([
+        [50, 50, 80, 80],
+        [50, 50, 80, 80],
+        [50, 50, 80, 80],
+        [50, 50, 80, 80],
+    ], dtype=np.uint8)
+
+    bbox = (10.0, 10.0, 10.04, 10.04)  # small AOI matching the raster's extent
+    transform = transform_from_bounds(*bbox, raw.shape[1], raw.shape[0])
+
+    with rasterio.io.MemoryFile() as memfile:
+        with memfile.open(
+            driver="GTiff", height=raw.shape[0], width=raw.shape[1], count=1,
+            dtype=raw.dtype, crs="EPSG:4326", transform=transform,
+        ) as dataset:
+            dataset.write(raw, 1)
+
+        with memfile.open() as dataset:
+            fractions = read_lulc_fractions(dataset, bbox, target_size=8)
+
+    assert fractions.shape == (4, 8, 8)
+    veg, built_up, water, bare = fractions
+    # left half of the AOI should read as mostly built-up, right half mostly water
+    assert built_up[:, :3].mean() > 0.7
+    assert water[:, 5:].mean() > 0.7
+    assert veg.mean() < 0.1 and bare.mean() < 0.1

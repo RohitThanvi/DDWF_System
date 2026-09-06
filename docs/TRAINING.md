@@ -40,12 +40,13 @@ ground truth) for the same place and time. Three pieces:
   script's docstring for exactly why this is a defensible, if imperfect,
   proxy pairing, and what it is not a substitute for).
 - **Terrain raster (DEM/LULC/LST)** — the DEM channels (elevation, slope,
-  aspect) are fetched for real by the same script, from Open-Meteo's
-  Elevation API (Copernicus GLO-90, free, no key —
-  `app/data/terrain_sources.py`). LULC and LST remain documented stub
-  channels (zeros) — wiring those up is the next real step once the
-  DEM-only pipeline is validated:
-  - LULC: ESA WorldCover (free, global, 10m) — https://esa-worldcover.org
+  aspect) and the LULC channels (vegetation/built-up/water/bare-or-snow
+  fractions) are both fetched for real by the same script — DEM from
+  Open-Meteo's Elevation API (Copernicus GLO-90), LULC from ESA
+  WorldCover 10m read directly off its public S3 bucket via HTTP range
+  requests (`app/data/terrain_sources.py`). LST remains the one stub
+  channel (zeros) — it needs a NASA Earthdata login, unlike the other two
+  free/key-less sources:
   - LST: MODIS LST (free via NASA Earthdata) —
     https://appeears.earthdatacloud.nasa.gov
 - **Hi-res ground truth** — Option B's default is the dense Open-Meteo
