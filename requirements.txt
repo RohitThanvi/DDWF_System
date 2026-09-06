@@ -11,6 +11,7 @@ orjson==3.10.7
 # DDWF actually trains/serves in the default Option B design) ---
 torch==2.4.1
 numpy==1.26.4
+scipy==1.14.1   # slope/aspect derivation + raster resampling in terrain_fusion.py
 
 # --- Caching / infra ---
 redis==5.0.8

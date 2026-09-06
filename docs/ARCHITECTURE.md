@@ -85,15 +85,23 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
 
 ## Known gaps you should close before this is production-real
 
-1. `TerrainFusionService.fetch_raster_patch` returns a zero array — wire it
-   to a real Copernicus GLO-30 (DEM) / ESA WorldCover (LULC) / MODIS (LST)
-   reader.
+1. `TerrainFusionService.fetch_raster_patch` now fetches **real**
+   elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90).
+   LULC and LST channels are still documented stubs (zeros) — wire those to
+   ESA WorldCover / MODIS LST once you're ready (see `docs/TRAINING.md`).
 2. The downscaler and SIREN terrain field ship with **randomly-initialized
-   weights** — see `docs/TRAINING.md` for how to actually train them; this
-   is the one training effort Option B still requires.
+   weights** — `scripts/build_aoi_pairs_manifest.py` +
+   `training/train_downscaler.py` now form a real, runnable pipeline to
+   train them; see `docs/TRAINING.md` for the honest scope of the training
+   *signal* itself (the fine-grid-Open-Meteo-as-target proxy is real but
+   imperfect — read the script's docstring before trusting the result
+   operationally).
 3. `app/api/routes/forecast.py`'s tokenization of the coarse patch into
-   cross-attention tokens is a crude reshape — replace with a real
-   patch-embedding, trained jointly with the downscaler.
+   cross-attention tokens is a crude reshape (one token per coarse grid
+   cell, raw feature width = number of coarse variables) — functional and
+   dimensionally consistent with the model (`DiffusionDownscaler.raw_token_dim`),
+   but a learned patch-embedding would likely do better; worth revisiting
+   once there's a trained checkpoint to benchmark against.
 4. `EnsemblerService` runs a tiny 3-seed ensemble inline per request for
    demo purposes; production should precompute a larger diffusion-seed
    ensemble and cache it per AOI per cycle, same pattern as the coarse

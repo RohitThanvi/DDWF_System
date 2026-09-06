@@ -32,36 +32,50 @@ Open-Meteo already gives you for free.
 You need **paired tiles**: (coarse forecast patch, terrain raster, hi-res
 ground truth) for the same place and time. Three pieces:
 
-- **Coarse forecast patch** — call the same Open-Meteo grid endpoint DDWF
-  uses at serving time (`app/data/external_forecast.py`), but for *past*
-  dates, using Open-Meteo's [historical/archive
-  API](https://open-meteo.com/en/docs/historical-weather-api) (also free).
-  This gives you the exact input distribution the model will see in
-  production — no train/serve mismatch.
-- **Terrain raster (DEM/LULC/LST)**:
-  - DEM: Copernicus GLO-30 (free, global, 30m) —
-    https://registry.opendata.aws/copernicus-dem/
+- **Coarse forecast patch** — `scripts/build_aoi_pairs_manifest.py` handles
+  this for you: it queries Open-Meteo's free [historical/archive
+  API](https://open-meteo.com/en/docs/historical-weather-api) at two grid
+  densities over the same AOI/date/hour — the sparse query becomes the
+  conditioning input, the dense query becomes the training target (see the
+  script's docstring for exactly why this is a defensible, if imperfect,
+  proxy pairing, and what it is not a substitute for).
+- **Terrain raster (DEM/LULC/LST)** — the DEM channels (elevation, slope,
+  aspect) are fetched for real by the same script, from Open-Meteo's
+  Elevation API (Copernicus GLO-90, free, no key —
+  `app/data/terrain_sources.py`). LULC and LST remain documented stub
+  channels (zeros) — wiring those up is the next real step once the
+  DEM-only pipeline is validated:
   - LULC: ESA WorldCover (free, global, 10m) — https://esa-worldcover.org
   - LST: MODIS LST (free via NASA Earthdata) —
     https://appeears.earthdatacloud.nasa.gov
-- **Hi-res ground truth** — the thing you're actually training the model
-  to produce. Realistic sources:
-  - Station observations near your AOI (IMD for India, NOAA ISD globally)
-    — sparse but real
-  - A higher-resolution reanalysis product (ERA5-Land, 9km) as a training
-    *proxy* for "hi-res truth" where station density is too low — this is
-    standard practice when true 100m verification data isn't available
+- **Hi-res ground truth** — Option B's default is the dense Open-Meteo
+  query above (a real, if approximate, signal). For a genuinely better
+  target once the pipeline is proven out: station observations near your
+  AOI (IMD for India, NOAA ISD globally), or a higher-resolution reanalysis
+  product (ERA5-Land, 9km) as a training proxy where station density is
+  too low.
 
-Build a manifest (AOI bbox, date, paths to the three pieces above) and
-implement `AOIPairDataset.__iter__` in `training/train_downscaler.py`
-against it — it currently raises `NotImplementedError` on purpose, since
-there's no way to fabricate real geospatial training pairs without your
-actual data sources wired up.
+**Build the manifest:**
+```bash
+pip install -r requirements-train.txt
+python scripts/build_aoi_pairs_manifest.py \
+    --region 69.5,23.0,78.3,30.2 \
+    --start-date 2024-01-01 --end-date 2024-01-31 \
+    --n-aois 40 --coarse-grid 8 --fine-grid 32 \
+    --out-dir ./data/aoi_pairs --manifest-out ./data/aoi_pairs_manifest.json
+```
+The default region is Rajasthan — change `--region` for wherever you have
+the best ground-truth station access. **Start with `--n-aois 40` or so** to
+validate the pipeline end-to-end before scaling up to hundreds/thousands of
+pairs; each AOI/date makes 3 API calls (2x Open-Meteo archive + 1x
+elevation), so be considerate of Open-Meteo's free-tier fair-use limits
+when scaling.
 
-**Start small.** A few hundred AOI/date pairs around Jaipur/Rajasthan (or
-wherever you have station data access) is a reasonable first dataset —
-you're validating the architecture and pipeline before scaling up
-geographic/temporal coverage.
+`AOIPairDataset` in `training/train_downscaler.py` reads this manifest
+directly — no further implementation needed to get training running
+end-to-end; `tests/test_training_data.py` exercises the exact read path
+against synthetic-but-correctly-shaped data if you want to confirm it
+works before spending API calls.
 
 ### 3. Train
 
@@ -105,15 +119,17 @@ curl http://localhost:8000/health   # downscaler_loaded should now read true
 
 | Stage | Effort |
 |---|---|
-| Open-Meteo historical pulls + terrain raster sourcing | ~3-5 days |
-| Pairing pipeline (`AOIPairDataset` implementation) | ~3-5 days |
+| Run `build_aoi_pairs_manifest.py` for a first small batch (~40 pairs) | ~1 day (mostly API call latency, not implementation — the pipeline is already built) |
+| Review pairs, decide if/when to swap in real station ground truth | ~1-2 days |
+| Scale up manifest to a few hundred/thousand pairs | ~2-3 days |
 | First training run + iteration | ~3-7 days (small model, fast iteration) |
 | Eval (CRPS, held-out comparison, zero-shot check) | ~2-3 days |
 
-Total: roughly **2-3 weeks** part-time to a first real, evaluated
-checkpoint — the service is usable end-to-end (against Open-Meteo +
-untrained downscaler) the entire time, so nothing about Vayu integration
-is blocked on this finishing.
+Total: roughly **1.5-2 weeks** part-time to a first real, evaluated
+checkpoint (down from the original ~2-3 week estimate now that the data
+pipeline is implemented, not just designed) — the service is usable
+end-to-end (against Open-Meteo + untrained downscaler) the entire time, so
+nothing about Vayu integration is blocked on this finishing.
 
 ---
 

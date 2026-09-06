@@ -40,7 +40,9 @@ How to actually train the downscaler: [`docs/TRAINING.md`](docs/TRAINING.md).
 - **Downscaling head (Module 3, the trainable core):** conditional
   diffusion U-Net (DDPM/EDM-style) with cross-attention to the coarse
   forecast, distilled DDIM sampler for low-latency serving, plus a SIREN
-  implicit terrain field for zero-shot unmapped-AOI inference
+  implicit terrain field for zero-shot unmapped-AOI inference. Real
+  elevation/slope/aspect terrain data via Open-Meteo's Elevation API
+  (Copernicus GLO-30/90, free, no key); LULC/LST remain documented stubs.
 - **Ensembling (Module 4):** diffusion-seed perturbation aggregated to
   p10/p50/p90 with an explicit low-skill flag past Day 10
 - **Optional upgrade path:** the original SFNO global engine (Module 2) —
@@ -67,10 +69,11 @@ curl -X POST http://localhost:8000/v1/forecast \
   -H "Content-Type: application/json" \
   -d '{"lat": 26.9, "lon": 75.8, "horizon_days": 7}'
 ```
-The coarse forecast is real (pulled live from Open-Meteo). The downscaled
-output isn't meteorologically meaningful yet without a trained downscaler
-checkpoint — `/health`'s `downscaler_loaded` tells you honestly whether one
-is present.
+The coarse forecast and terrain elevation are both real (pulled live from
+Open-Meteo — internet access required for `/v1/forecast` to work). The
+downscaled output isn't meteorologically meaningful yet without a trained
+downscaler checkpoint — `/health`'s `downscaler_loaded` tells you honestly
+whether one is present.
 
 ## Docker
 
@@ -110,16 +113,20 @@ app/
   core/        config, logging, auth
   models/      diffusion U-Net, SIREN, SFNO (optional) — pure PyTorch, no I/O
   services/    stateful wrappers around models (downscaling, ensembling, terrain fusion)
-  data/        Open-Meteo client (default), Zarr/feature-store access layer (optional path)
+  data/        Open-Meteo forecast + elevation clients (default), Zarr/feature-store access layer (optional path)
 training/      Lightning + Hydra training scripts, loss functions, configs
-scripts/       ERA5 download + Zarr store build utilities (optional path only)
+scripts/       AOI training-pair builder (Open-Meteo + elevation), ERA5 download + Zarr utilities (optional path)
 docs/          architecture, API reference, training guide
-tests/         pytest suite (API + model shape smoke tests)
+tests/         pytest suite (API, model shape, and training-data-pipeline smoke tests)
 ```
 
 ## Status
 
 Architecture, API surface, and model code are implemented and tested
-(`pytest -q` passes end-to-end). **No trained downscaler checkpoint ships
-in this repo** — see `docs/TRAINING.md` for the realistic ~2-3 week path
-from here to real weights.
+(`pytest -q` passes end-to-end — 14 tests, including a real read of the
+training-data pipeline and a real forward pass through the actual serving
+code path). **No trained downscaler checkpoint ships in this repo** —
+`scripts/build_aoi_pairs_manifest.py` + `training/train_downscaler.py` are
+a real, runnable pipeline to build one; see `docs/TRAINING.md` for the
+honest ~1.5-2 week path from here to real weights, and exactly what's real
+training signal vs. documented proxy/stub.

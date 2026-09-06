@@ -10,6 +10,7 @@ import torch
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.data.external_forecast import OPEN_METEO_VARIABLES
 from app.models.diffusion_unet import DiffusionDownscaler
 
 log = get_logger(__name__)
@@ -21,7 +22,7 @@ class DownscalerService:
     def __init__(self):
         self.settings = get_settings()
         self.device = torch.device(self.settings.device)
-        self.model = DiffusionDownscaler()
+        self.model = DiffusionDownscaler(raw_token_dim=len(OPEN_METEO_VARIABLES))
         self._load_weights()
         self.model.to(self.device).eval()
 

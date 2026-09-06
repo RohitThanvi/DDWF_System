@@ -36,10 +36,11 @@ def client(monkeypatch):
         }
 
     monkeypatch.setattr(CoarseForecastService, "get_coarse_patch", _fake_coarse_patch)
-    monkeypatch.setattr(
-        TerrainFusionService, "fetch_raster_patch",
-        lambda self, bbox, resolution_m=100: np.zeros((8, 16, 16), dtype=np.float32),
-    )
+
+    async def _fake_raster_patch(self, bbox, resolution_m=100, target_size=256):
+        return np.zeros((8, 16, 16), dtype=np.float32)
+
+    monkeypatch.setattr(TerrainFusionService, "fetch_raster_patch", _fake_raster_patch)
     monkeypatch.setattr(
         DownscalerService, "downscale",
         lambda self, coarse_patch, terrain_raster, coarse_tokens, n_channels_out=8, n_steps=None:

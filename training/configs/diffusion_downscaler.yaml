@@ -4,6 +4,7 @@ model:
   cond_raster_channels: 8
   base_channels: 64
   channel_mults: [1, 2, 4, 8]
+  raw_token_dim: 8          # must match len(OPEN_METEO_VARIABLES) in app/data/external_forecast.py
   context_dim: 64
   time_dim: 256
 
@@ -14,16 +15,14 @@ diffusion:
   sampling_steps_eval: 16   # matches serving-time distilled sampler
 
 data:
-  coarse_source: global_engine_trajectory_cache
-  terrain_source:
-    dem: copernicus_glo30
-    lulc: esa_worldcover
-    lst: modis_lst
-  aoi_patch_size: 256
-  target_resolution_m: [100, 1000]
+  # Built by scripts/build_aoi_pairs_manifest.py (Open-Meteo historical
+  # coarse/fine pairs + real elevation-derived terrain — see that script's
+  # docstring and docs/TRAINING.md for exactly what's real vs. proxy/stub).
+  manifest_path: ./data/aoi_pairs_manifest.json
+  aoi_patch_size: 32       # must match --fine-grid passed to build_aoi_pairs_manifest.py
   batch_size: 8
   grad_accum_steps: 4
-  num_workers: 8
+  num_workers: 4
 
 implicit_field:
   enabled: true            # jointly trains TerrainSIREN for zero-shot AOIs

@@ -53,7 +53,7 @@ async def forecast(req: ForecastRequest) -> ForecastResponse:
     coarse_data = coarse["data"]  # (n_hours, n_vars, grid, grid)
 
     # 2) terrain fusion for the AOI
-    raster = terrain.fetch_raster_patch(tuple(req.bbox), resolution_m=req.resolution_m)
+    raster = await terrain.fetch_raster_patch(tuple(req.bbox), resolution_m=req.resolution_m)
 
     # 3) downscale + ensemble, one point per day (take the 12:00 UTC hourly slice)
     timeseries: list[TimestepValue] = []

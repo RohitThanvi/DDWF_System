@@ -55,7 +55,8 @@ class DiffusionDownscaler(nn.Module):
         cond_raster_channels: int = 8, # DEM/slope/aspect/LULC-onehot/LST
         base_channels: int = 64,
         channel_mults: tuple[int, ...] = (1, 2, 4, 8),
-        context_dim: int = 64,         # TerrainSIREN / coarse-token dim
+        raw_token_dim: int = 8,        # width of the raw coarse-forecast tokens (n_vars from the coarse source)
+        context_dim: int = 64,         # internal cross-attn width tokens get projected into
         time_dim: int = 256,
     ):
         super().__init__()
@@ -63,6 +64,7 @@ class DiffusionDownscaler(nn.Module):
             SinusoidalTimeEmbedding(time_dim),
             nn.Linear(time_dim, time_dim), nn.SiLU(), nn.Linear(time_dim, time_dim),
         )
+        self.token_proj = nn.Linear(raw_token_dim, context_dim)
 
         in_ch = in_channels + cond_raster_channels  # noisy target concat with terrain/LST raster
         self.stem = nn.Conv2d(in_ch, base_channels, 3, padding=1)
@@ -96,10 +98,11 @@ class DiffusionDownscaler(nn.Module):
         self,
         noisy_target: torch.Tensor,      # (B, in_channels, H, W) — x_t
         terrain_raster: torch.Tensor,    # (B, cond_raster_channels, H, W) — DEM/LULC/LST
-        coarse_forecast_tokens: torch.Tensor,  # (B, N_tokens, context_dim)
+        coarse_forecast_tokens: torch.Tensor,  # (B, N_tokens, raw_token_dim)
         timestep: torch.Tensor,          # (B,)
     ) -> torch.Tensor:
         cond = self.time_embed(timestep)
+        context = self.token_proj(coarse_forecast_tokens)  # -> (B, N_tokens, context_dim)
         x = torch.cat([noisy_target, terrain_raster], dim=1)
         h = self.stem(x)
 
@@ -109,7 +112,7 @@ class DiffusionDownscaler(nn.Module):
             skips.append(skip)
 
         h = self.bottleneck_1(h, cond)
-        h = self.bottleneck_cross_attn(h, coarse_forecast_tokens)
+        h = self.bottleneck_cross_attn(h, context)
         h = self.bottleneck_2(h, cond)
 
         for block in self.up_blocks:
