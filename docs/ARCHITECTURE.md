@@ -1,15 +1,39 @@
 # DDWF System — Architecture
 
-This service implements the Global 30-Day DDWF + Satellite AOI Downscaling
-design from the source TDD, as an independent FastAPI microservice. It has
-no dependency on Project Vayu's codebase — Vayu is just an HTTP client of
-this service (see `app/api/routes/vayu_integration.py`).
+This service implements the AOI-downscaling design from the source TDD as
+an independent FastAPI microservice, with one deliberate scope change from
+the original design: **Option B**.
+
+## Design decision: Option B (borrow the global engine, train the downscaler)
+
+The original TDD (Module 2) calls for training/serving a Spherical Fourier
+Neural Operator as the global 30-day planetary engine. That's a large,
+multi-week-to-months undertaking (see `docs/TRAINING.md` "Option A") and,
+for the actual goal here — Vayu getting a working weather layer — it's not
+where the interesting or necessary work is.
+
+**Option B**: treat "a coarse global forecast" as a solved problem and pull
+it from a free, already-operational source (Open-Meteo, no API key, blends
+GFS/ICON/ECMWF-open-data). All of DDWF's own training effort goes into the
+genuinely novel piece: the **satellite-terrain-conditioned diffusion
+downscaler** (Module 3) plus the **zero-shot SIREN implicit terrain
+field**. This is a smaller, faster, and more honest scope for an
+independent project — real research/engineering work where it matters,
+without pretending to have retrained a global NWP model from a laptop.
+
+Practical consequence: horizon is capped at **16 days** (Open-Meteo's free
+forecast horizon) instead of 30. See `ForecastRequest.horizon_days`.
+
+The SFNO code (`app/models/sfno.py`, `app/services/global_engine.py`,
+`training/train_global_engine.py`) is kept in the repo, fully working and
+tested — it's the natural **Option A upgrade path** if there's ever a real
+reason to own the global-engine piece instead of depending on Open-Meteo.
 
 ```
-ERA5/CMIP6/MERRA-2 ──▶ Zarr Data Lake ──▶ Global Engine (SFNO) ──▶ 30-day trajectory cache
-                                                                          │
-User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐           │
-                                                              ▼           ▼
+Open-Meteo (free, no key) ──▶ Coarse forecast patch (per-AOI grid, cached)
+                                                                  │
+User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   │
+                                                              ▼   ▼
                                                   AOI Downscaling Head (Diffusion)
                                                               │
                                                               ▼
@@ -21,14 +45,15 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐    
 
 ## Module -> code map
 
-| TDD Module | Code |
-|---|---|
-| 1. Data Ingestion & Spatiotemporal Pipeline | `app/data/zarr_pipeline.py`, `app/data/feature_store.py`, `app/data/normalization.py`, `scripts/download_era5.py`, `scripts/build_zarr_store.py` |
-| 2. Global Planetary Engine (SFNO) | `app/models/sfno.py`, `app/services/global_engine.py`, `training/train_global_engine.py`, `training/losses.py` |
-| 3. Satellite AOI & Terrain Downscaling Head | `app/models/diffusion_unet.py`, `app/models/siren.py`, `app/services/downscaler.py`, `app/services/terrain_fusion.py`, `training/train_downscaler.py` |
-| 4. Uncertainty Estimation & Ensembling | `app/services/ensembler.py` |
-| 5. Infrastructure Under Compute Constraints | `Dockerfile`, `docker-compose.yml`, `app/core/config.py`, `training/configs/*.yaml` (LoRA/DeepSpeed/precision settings) |
-| 6. End-to-End Integration Flow | `app/api/routes/forecast.py`, `app/main.py` |
+| Module | Code | Status |
+|---|---|---|
+| Coarse forecast source | `app/data/external_forecast.py` (Open-Meteo client + cache) | **Default (Option B)** |
+| 1. Data Ingestion & Spatiotemporal Pipeline | `app/data/zarr_pipeline.py`, `app/data/feature_store.py`, `app/data/normalization.py`, `scripts/download_era5.py`, `scripts/build_zarr_store.py` | Optional — Option A only |
+| 2. Global Planetary Engine (SFNO) | `app/models/sfno.py`, `app/services/global_engine.py`, `training/train_global_engine.py`, `training/losses.py` | Optional — Option A only |
+| 3. Satellite AOI & Terrain Downscaling Head | `app/models/diffusion_unet.py`, `app/models/siren.py`, `app/services/downscaler.py`, `app/services/terrain_fusion.py`, `training/train_downscaler.py` | **Default — this is what DDWF trains** |
+| 4. Uncertainty Estimation & Ensembling | `app/services/ensembler.py` | Default |
+| 5. Infrastructure Under Compute Constraints | `Dockerfile`, `docker-compose.yml`, `app/core/config.py`, `training/configs/*.yaml` | Default |
+| 6. End-to-End Integration Flow | `app/api/routes/forecast.py`, `app/main.py` | Default |
 
 ## Why FastAPI as an independent service
 
@@ -36,51 +61,40 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐    
   weights; it calls `POST /v1/forecast` or `POST /v1/vayu/weather-layer`
   over HTTP with an API key. DDWF can be redeployed, rescaled, or have its
   models swapped without touching Vayu at all.
-- **Different scaling profile.** DDWF is GPU-bound and cache-heavy (one
-  expensive global rollout per forecast cycle, shared across all callers).
-  Vayu is a lightweight FastAPI + React app on Render/Vercel. Coupling them
-  in one deployable would force Vayu's ops to inherit DDWF's GPU/latency
-  requirements for no reason.
-- **Reusability.** Any other consumer (a CLI, a notebook, another product)
-  gets the same contract Vayu gets — there's exactly one weather engine to
-  maintain.
+- **Different scaling profile.** DDWF's downscaler is GPU-bound; Vayu is a
+  lightweight FastAPI + React app on Render/Vercel. Coupling them in one
+  deployable would force Vayu's ops to inherit GPU/latency requirements for
+  no reason.
+- **Reusability.** Any other consumer gets the same contract Vayu gets —
+  one weather engine to maintain, not one embedded per caller.
 
-## Serving-time shortcuts (and why they're safe)
+## Serving-time notes
 
-- **FFT fallback instead of true spherical harmonics at inference**
-  (`app/models/sfno.py: FFTFallbackSHT`). Training uses the true SHT via
-  `torch-harmonics` (pole-distortion-free); serving uses a plain 2D FFT
-  because it's dramatically cheaper to ship and run, and the model has
-  already learned to compensate for the transform it was trained with —
-  as long as train and serve use the *same* transform. **This means the
-  served checkpoint must be trained with `sht_backend: fft` if you want
-  serving to exactly match training**, or you accept the small approximation
-  gap from swapping SHT->FFT post-training. `training/configs/sfno_base.yaml`
-  defaults to the true SHT (`harmonics`) for training quality; flip it to
-  `fft` if you'd rather train/serve consistently on the cheap transform.
-- **Depthwise spectral weights** (`SpectralConv`) instead of a dense
-  `(in, out, modes, modes)` tensor — the textbook FNO formulation is only
-  tractable for small mode counts; at `l_max=180` a dense weight is tens of
-  GB per block. Channel mixing happens in the surrounding 1x1 convs instead.
-- **Trajectory caching per forecast cycle**
-  (`app/services/cache.py`) — the expensive 120-step SFNO rollout runs once
-  per cycle (default 6h TTL), not per user request. AOI downscaling is the
-  only per-request-expensive step, and it's the one already designed for
-  low latency (8-16 step distilled DDIM sampler).
+- **Coarse patch construction.** Open-Meteo is a point API; DDWF tiles the
+  AOI bbox with an N x N grid of sample points and batches them into one
+  request (`app/data/external_forecast.py:_grid_points`), building a
+  pseudo-raster coarse patch out of point forecasts. This is coarser than a
+  true 25km gridded NWP output but free and zero-maintenance.
+- **Per-AOI caching.** `CoarseForecastService` caches by rounded bbox +
+  grid size + horizon, so repeated queries for the same AOI within a
+  request burst don't re-hit Open-Meteo.
+- **Depthwise spectral weights** in the (optional, Option A) SFNO — a
+  dense `(in, out, modes, modes)` weight is only tractable for small mode
+  counts; at `l_max=180` it's tens of GB per block, so `SpectralConv` is
+  depthwise with channel-mixing left to the surrounding 1x1 convs.
 
 ## Known gaps you should close before this is production-real
 
-1. `GlobalEngineService._load_initial_condition` and
-   `TerrainFusionService.fetch_raster_patch` return zero arrays — wire them
-   to `ZarrDataLake.latest_analysis_state()` and a real DEM/LULC/LST reader.
-2. `app/api/routes/forecast.py`'s tokenization of the coarse patch into
-   cross-attention tokens is a placeholder reshape — replace with a real
-   patch-embedding (e.g. a small conv stem + flatten, trained jointly with
-   the downscaler).
-3. `training/train_downscaler.py: AOIPairDataset` raises
-   `NotImplementedError` — you need a real paired coarse/hi-res tile
-   manifest before that script runs (see `docs/TRAINING.md`).
-4. `EnsemblerService` runs a tiny 3-member ensemble inline per request for
-   demo purposes; production should precompute the full N (IC) x M
-   (diffusion-seed) ensemble grid offline, once per cycle, alongside the
-   trajectory cache.
+1. `TerrainFusionService.fetch_raster_patch` returns a zero array — wire it
+   to a real Copernicus GLO-30 (DEM) / ESA WorldCover (LULC) / MODIS (LST)
+   reader.
+2. The downscaler and SIREN terrain field ship with **randomly-initialized
+   weights** — see `docs/TRAINING.md` for how to actually train them; this
+   is the one training effort Option B still requires.
+3. `app/api/routes/forecast.py`'s tokenization of the coarse patch into
+   cross-attention tokens is a crude reshape — replace with a real
+   patch-embedding, trained jointly with the downscaler.
+4. `EnsemblerService` runs a tiny 3-seed ensemble inline per request for
+   demo purposes; production should precompute a larger diffusion-seed
+   ensemble and cache it per AOI per cycle, same pattern as the coarse
+   forecast cache.

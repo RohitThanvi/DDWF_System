@@ -21,9 +21,18 @@ class Settings(BaseSettings):
     ddwf_api_key: str = "change-me-to-a-long-random-secret"
 
     # --- Model checkpoints ---
+    # Downscaler is the model DDWF trains and serves (Option B design — see
+    # docs/ARCHITECTURE.md). global_engine_checkpoint / rollout settings are
+    # kept for the optional SFNO upgrade path (Option A) and unused by the
+    # default request flow.
     global_engine_checkpoint: str = "./checkpoints/sfno_global_v1.pt"
     downscaler_checkpoint: str = "./checkpoints/diffusion_downscaler_v1.pt"
     device: str = "cpu"
+
+    # --- Coarse forecast source (Option B: Open-Meteo, free/no API key) ---
+    coarse_forecast_provider: str = "open-meteo"
+    coarse_grid_size: int = 8          # NxN sample points tiling the AOI bbox
+    max_horizon_days: int = 16         # Open-Meteo's free-tier forecast horizon
 
     # --- Data lake ---
     zarr_store_uri: str = "s3://ddwf-data-lake/era5.zarr"
@@ -34,7 +43,8 @@ class Settings(BaseSettings):
     # --- Redis ---
     redis_url: str = "redis://localhost:6379/0"
 
-    # --- Ensemble / rollout ---
+    # --- Rollout / ensemble (SFNO optional-upgrade-path settings; unused
+    # by the default Open-Meteo-backed request flow) ---
     rollout_hop_hours: int = 6
     rollout_steps: int = 120         # 120 * 6h = 720h = 30 days
     ic_ensemble_members: int = 16

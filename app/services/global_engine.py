@@ -1,6 +1,14 @@
 """
 Wraps the SFNO model for cached, cycle-level trajectory production.
-This is Module 2 + the caching half of Module 5/6 in the TDD.
+
+OPTIONAL UPGRADE PATH (Option A) — not used by the default request flow.
+DDWF's default `/v1/forecast` flow uses `app/data/external_forecast.py`
+(Open-Meteo) for the coarse global forecast instead of this service, per
+the Option B design (see docs/ARCHITECTURE.md). This module is kept
+functional and tested (tests/test_models.py exercises the SFNO
+architecture directly) as the natural swap-in if/when there's a reason to
+own the global-engine piece instead of depending on a free external
+source — see docs/TRAINING.md "Option A" for what that would take.
 """
 from __future__ import annotations
 

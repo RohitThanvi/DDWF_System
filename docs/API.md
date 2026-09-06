@@ -11,16 +11,19 @@ Liveness/readiness probe. No auth required.
 ```json
 {
   "status": "ok",
-  "global_engine_loaded": false,
   "downscaler_loaded": false,
+  "coarse_forecast_provider": "open-meteo",
+  "sfno_checkpoint_present": false,
   "device": "cpu"
 }
 ```
 
-`*_loaded: false` means a checkpoint file wasn't found at the configured
-path — the service still runs (useful for smoke-testing the API surface)
-but forecasts are not meteorologically meaningful until real weights are
-placed at `GLOBAL_ENGINE_CHECKPOINT` / `DOWNSCALER_CHECKPOINT`.
+`downscaler_loaded: false` means no checkpoint file was found at
+`DOWNSCALER_CHECKPOINT` — the service still runs (useful for smoke-testing
+the API surface) but forecasts are not meteorologically meaningful until a
+trained downscaler checkpoint is placed there (see docs/TRAINING.md).
+`sfno_checkpoint_present` reflects the optional Option A upgrade path and
+is unused by the default request flow.
 
 ## `POST /v1/forecast`
 
@@ -32,12 +35,13 @@ The primary contract. Full p10/p50/p90 timeseries.
   "lat": 26.9,
   "lon": 75.8,
   "bbox": [75.55, 26.65, 76.05, 27.15],
-  "horizon_days": 30,
+  "horizon_days": 16,
   "variables": ["temperature_2m", "wind_10m", "precipitation", "surface_pressure"],
   "resolution_m": 100
 }
 ```
 `bbox` is optional — a small default AOI is generated around `(lat, lon)` if omitted.
+`horizon_days` is capped at **16** (Open-Meteo's free forecast horizon — see docs/ARCHITECTURE.md "Option B").
 
 **Response**
 ```json
@@ -61,7 +65,7 @@ The primary contract. Full p10/p50/p90 timeseries.
 }
 ```
 `confidence` is `high_skill` (Day 0-10), `moderate_skill` (Day 10-15), or
-`low_skill` (Day 15-30) — see `EnsemblerService.confidence_flag`.
+`low_skill` (Day 15-16) — see `EnsemblerService.confidence_flag`.
 
 ## `POST /v1/vayu/weather-layer`
 

@@ -14,7 +14,10 @@ class ForecastRequest(BaseModel):
     bbox: list[float] | None = Field(
         None, description="[min_lon, min_lat, max_lon, max_lat]; if omitted, a small default AOI around (lat, lon) is used"
     )
-    horizon_days: int = Field(30, ge=1, le=30, description="Forecast horizon, capped at 30 days")
+    horizon_days: int = Field(
+        16, ge=1, le=16,
+        description="Forecast horizon. Capped at 16 days — the coarse forecast source (Open-Meteo) doesn't offer further out; see docs/ARCHITECTURE.md.",
+    )
     variables: list[str] = Field(
         default_factory=lambda: ["temperature_2m", "wind_10m", "precipitation", "surface_pressure"],
         description="Which variables to return",
@@ -50,6 +53,7 @@ class ForecastResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    global_engine_loaded: bool
     downscaler_loaded: bool
+    coarse_forecast_provider: str
+    sfno_checkpoint_present: bool  # optional upgrade path (Option A); unused by default request flow
     device: str

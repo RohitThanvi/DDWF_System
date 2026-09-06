@@ -1,7 +1,8 @@
 """
 Smoke tests for the API surface. Run with: pytest -q
-These use FastAPI's TestClient and monkeypatch the heavy model services so
-CI doesn't need real checkpoints/GPUs to validate routing, schemas, and auth.
+These monkeypatch the coarse-forecast source and heavy model services so
+CI doesn't need network access, real checkpoints, or a GPU to validate
+routing, schemas, and auth.
 """
 from __future__ import annotations
 
@@ -22,14 +23,19 @@ def _env(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
+    from app.data.external_forecast import CoarseForecastService
     from app.services.downscaler import DownscalerService
-    from app.services.global_engine import GlobalEngineService
     from app.services.terrain_fusion import TerrainFusionService
 
-    monkeypatch.setattr(
-        GlobalEngineService, "get_trajectory",
-        lambda self, cond, force_refresh=False: np.zeros((120, 86, 4, 4), dtype=np.float32),
-    )
+    async def _fake_coarse_patch(self, bbox, grid_size=8, forecast_days=16):
+        n_hours = forecast_days * 24
+        return {
+            "hourly_time": [f"2026-09-0{d+1}T00:00" for d in range(min(forecast_days, 9))],
+            "data": np.zeros((n_hours, 8, grid_size, grid_size), dtype=np.float32),
+            "variables": ["temperature_2m"] * 8,
+        }
+
+    monkeypatch.setattr(CoarseForecastService, "get_coarse_patch", _fake_coarse_patch)
     monkeypatch.setattr(
         TerrainFusionService, "fetch_raster_patch",
         lambda self, bbox, resolution_m=100: np.zeros((8, 16, 16), dtype=np.float32),
@@ -48,7 +54,9 @@ def client(monkeypatch):
 def test_health(client):
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["coarse_forecast_provider"] == "open-meteo"
 
 
 def test_forecast_requires_api_key(client):
@@ -66,6 +74,15 @@ def test_forecast_happy_path(client):
     body = resp.json()
     assert body["timeseries"]
     assert body["timeseries"][0]["confidence"] in {"high_skill", "moderate_skill", "low_skill"}
+
+
+def test_forecast_horizon_capped_at_16_days(client):
+    resp = client.post(
+        "/v1/forecast",
+        headers={"X-API-Key": "test-key"},
+        json={"lat": 26.9, "lon": 75.8, "horizon_days": 30},
+    )
+    assert resp.status_code == 422  # Pydantic rejects horizon_days > 16
 
 
 def test_vayu_weather_layer(client):
