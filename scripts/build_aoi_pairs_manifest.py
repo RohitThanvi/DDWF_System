@@ -68,22 +68,30 @@ async def _fetch_historical_grid(
     variables: list[str],
     client,
 ) -> np.ndarray:
-    """Returns (n_vars, grid_size, grid_size) at 12:00 UTC on `day`."""
-    from app.data.external_forecast import _grid_points
+    """Returns (n_vars, grid_size, grid_size) at 12:00 UTC on `day`.
+    Batches into <=MAX_COORDS_PER_REQUEST-coordinate requests -- the
+    archive API hits the same URL-length 414 as the forecast API on
+    larger grids (fine_grid=32 -> 1024 points in one URL is well past
+    what the server accepts, regardless of Open-Meteo's documented
+    1000-location count limit, which is a separate thing from URL length)."""
+    from app.data.external_forecast import MAX_COORDS_PER_REQUEST, _grid_points
 
     points = _grid_points(bbox, grid_size)
-    params = {
-        "latitude": ",".join(f"{lat:.4f}" for lat, _ in points),
-        "longitude": ",".join(f"{lon:.4f}" for _, lon in points),
-        "hourly": ",".join(variables),
-        "start_date": day.isoformat(),
-        "end_date": day.isoformat(),
-        "timezone": "UTC",
-    }
-    resp = await client.get(ARCHIVE_URL, params=params)
-    resp.raise_for_status()
-    payload = resp.json()
-    locations = payload if isinstance(payload, list) else [payload]
+    locations: list[dict] = []
+    for i in range(0, len(points), MAX_COORDS_PER_REQUEST):
+        chunk = points[i : i + MAX_COORDS_PER_REQUEST]
+        params = {
+            "latitude": ",".join(f"{lat:.4f}" for lat, _ in chunk),
+            "longitude": ",".join(f"{lon:.4f}" for _, lon in chunk),
+            "hourly": ",".join(variables),
+            "start_date": day.isoformat(),
+            "end_date": day.isoformat(),
+            "timezone": "UTC",
+        }
+        resp = await client.get(ARCHIVE_URL, params=params)
+        resp.raise_for_status()
+        payload = resp.json()
+        locations.extend(payload if isinstance(payload, list) else [payload])
 
     data = np.zeros((len(variables), grid_size, grid_size), dtype=np.float32)
     for idx, loc in enumerate(locations):

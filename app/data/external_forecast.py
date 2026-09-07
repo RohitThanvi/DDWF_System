@@ -45,6 +45,15 @@ OPEN_METEO_VARIABLES = [
 
 OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 
+# Open-Meteo documents up to 1000 locations per request for weather
+# endpoints, but that's a location-count limit, not a URL-length one — a
+# plain HTTP GET with hundreds of lat/lon pairs in the query string trips
+# a 414 Request-URI Too Large from the server/proxy well before 1000. A
+# fine_grid of 32 (1024 points) hits this immediately. Chunking at 100
+# (same conservative limit Open-Meteo's own Elevation API documents) keeps
+# every request's URL comfortably short regardless of grid_size.
+MAX_COORDS_PER_REQUEST = 100
+
 
 def _grid_points(bbox: tuple[float, float, float, float], grid_size: int) -> list[tuple[float, float]]:
     """Evenly-spaced (lat, lon) sample points tiling the AOI bbox, used to
@@ -56,9 +65,10 @@ def _grid_points(bbox: tuple[float, float, float, float], grid_size: int) -> lis
 
 
 class OpenMeteoClient:
-    """Thin async client. Fetches one batched request per AOI (all grid
-    points passed as comma-separated lat/lon lists, per Open-Meteo's
-    multi-location support) rather than one request per point."""
+    """Thin async client. Batches grid points into
+    <=MAX_COORDS_PER_REQUEST-coordinate requests per AOI (comma-separated
+    lat/lon lists, per Open-Meteo's multi-location support) rather than one
+    request per point."""
 
     def __init__(self, base_url: str = OPEN_METEO_BASE_URL, timeout_s: float = 15.0):
         self.base_url = base_url
@@ -72,28 +82,32 @@ class OpenMeteoClient:
         variables: list[str] | None = None,
     ) -> dict:
         """Returns {"hourly_time": [...], "data": np.ndarray of shape
-        (n_hours, n_vars, grid_size, grid_size)}."""
+        (n_hours, n_vars, grid_size, grid_size)}. Batches into
+        <=MAX_COORDS_PER_REQUEST-coordinate requests to avoid a 414 from
+        the server on larger grids (see MAX_COORDS_PER_REQUEST docstring)."""
         import httpx
 
         variables = variables or OPEN_METEO_VARIABLES
         points = _grid_points(bbox, grid_size)
 
-        params = {
-            "latitude": ",".join(f"{lat:.4f}" for lat, _ in points),
-            "longitude": ",".join(f"{lon:.4f}" for _, lon in points),
-            "hourly": ",".join(variables),
-            "forecast_days": min(forecast_days, 16),
-            "timezone": "UTC",
-        }
-
+        locations: list[dict] = []
         async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            resp = await client.get(self.base_url, params=params)
-            resp.raise_for_status()
-            payload = resp.json()
+            for i in range(0, len(points), MAX_COORDS_PER_REQUEST):
+                chunk = points[i : i + MAX_COORDS_PER_REQUEST]
+                params = {
+                    "latitude": ",".join(f"{lat:.4f}" for lat, _ in chunk),
+                    "longitude": ",".join(f"{lon:.4f}" for _, lon in chunk),
+                    "hourly": ",".join(variables),
+                    "forecast_days": min(forecast_days, 16),
+                    "timezone": "UTC",
+                }
+                resp = await client.get(self.base_url, params=params)
+                resp.raise_for_status()
+                payload = resp.json()
+                # Open-Meteo returns a single object for a one-point chunk,
+                # a list for multiple.
+                locations.extend(payload if isinstance(payload, list) else [payload])
 
-        # Open-Meteo returns a single object for one location, a list for
-        # multiple (which is always our case here, grid_size >= 1).
-        locations = payload if isinstance(payload, list) else [payload]
         if len(locations) != len(points):
             log.warning("open_meteo.partial_response", expected=len(points), got=len(locations))
 
