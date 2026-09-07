@@ -22,6 +22,8 @@ docs/TRAINING.md "Option A").
 """
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 
 from app.core.config import get_settings
@@ -84,8 +86,13 @@ class OpenMeteoClient:
         """Returns {"hourly_time": [...], "data": np.ndarray of shape
         (n_hours, n_vars, grid_size, grid_size)}. Batches into
         <=MAX_COORDS_PER_REQUEST-coordinate requests to avoid a 414 from
-        the server on larger grids (see MAX_COORDS_PER_REQUEST docstring)."""
+        the server on larger grids (see MAX_COORDS_PER_REQUEST docstring),
+        with retry-with-backoff on 429s (see app/data/http_utils.py) and a
+        small delay between chunks so a large grid doesn't burst dozens of
+        requests at once."""
         import httpx
+
+        from app.data.http_utils import get_with_retry
 
         variables = variables or OPEN_METEO_VARIABLES
         points = _grid_points(bbox, grid_size)
@@ -101,12 +108,13 @@ class OpenMeteoClient:
                     "forecast_days": min(forecast_days, 16),
                     "timezone": "UTC",
                 }
-                resp = await client.get(self.base_url, params=params)
-                resp.raise_for_status()
+                resp = await get_with_retry(client, self.base_url, params)
                 payload = resp.json()
                 # Open-Meteo returns a single object for a one-point chunk,
                 # a list for multiple.
                 locations.extend(payload if isinstance(payload, list) else [payload])
+                if i + MAX_COORDS_PER_REQUEST < len(points):
+                    await asyncio.sleep(0.3)
 
         if len(locations) != len(points):
             log.warning("open_meteo.partial_response", expected=len(points), got=len(locations))

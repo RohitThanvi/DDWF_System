@@ -19,6 +19,8 @@ are real as a result — there is no remaining stub channel.
 """
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 
 from app.core.logging import get_logger
@@ -41,8 +43,11 @@ class ElevationClient:
         self, bbox: tuple[float, float, float, float], grid_size: int
     ) -> np.ndarray:
         """Returns a (grid_size, grid_size) elevation array in meters.
-        Batches into <=100-coordinate requests per Open-Meteo's limit."""
+        Batches into <=100-coordinate requests per Open-Meteo's limit, with
+        retry-with-backoff on 429s and a small delay between chunks."""
         import httpx
+
+        from app.data.http_utils import get_with_retry
 
         min_lon, min_lat, max_lon, max_lat = bbox
         lats = np.linspace(min_lat, max_lat, grid_size)
@@ -57,9 +62,10 @@ class ElevationClient:
                     "latitude": ",".join(f"{lat:.5f}" for lat, _ in chunk),
                     "longitude": ",".join(f"{lon:.5f}" for _, lon in chunk),
                 }
-                resp = await client.get(self.base_url, params=params)
-                resp.raise_for_status()
+                resp = await get_with_retry(client, self.base_url, params)
                 elevations.extend(resp.json()["elevation"])
+                if i + MAX_COORDS_PER_REQUEST < len(points):
+                    await asyncio.sleep(0.3)
 
         return np.array(elevations, dtype=np.float32).reshape(grid_size, grid_size)
 
@@ -214,10 +220,11 @@ class LSTClient:
         self.timeout_s = timeout_s
 
     async def _latest_modis_date(self, lat: float, lon: float, client) -> str | None:
-        resp = await client.get(
-            f"{self.base_url}/{MODIS_LST_PRODUCT}/dates", params={"latitude": lat, "longitude": lon}
+        from app.data.http_utils import get_with_retry
+
+        resp = await get_with_retry(
+            client, f"{self.base_url}/{MODIS_LST_PRODUCT}/dates", {"latitude": lat, "longitude": lon}
         )
-        resp.raise_for_status()
         dates = resp.json().get("dates", [])
         if not dates:
             return None
@@ -230,6 +237,8 @@ class LSTClient:
         persistent cloud cover at the latest date."""
         import httpx
         from scipy.ndimage import zoom as _zoom
+
+        from app.data.http_utils import get_with_retry
 
         min_lon, min_lat, max_lon, max_lat = bbox
         center_lat, center_lon = (min_lat + max_lat) / 2, (min_lon + max_lon) / 2
@@ -244,15 +253,15 @@ class LSTClient:
                 log.warning("terrain_fusion.lst_no_dates_available", lat=center_lat, lon=center_lon)
                 return np.zeros((1, target_size, target_size), dtype=np.float32)
 
-            resp = await client.get(
+            resp = await get_with_retry(
+                client,
                 f"{self.base_url}/{MODIS_LST_PRODUCT}/subset",
-                params={
+                {
                     "latitude": center_lat, "longitude": center_lon, "band": MODIS_LST_BAND,
                     "startDate": modis_date, "endDate": modis_date,
                     "kmAboveBelow": km_ab, "kmLeftRight": km_lr,
                 },
             )
-            resp.raise_for_status()
             payload = resp.json()
 
         subset = payload.get("subset", [])

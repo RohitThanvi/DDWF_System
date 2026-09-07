@@ -88,6 +88,7 @@ async def test_lst_client_parses_and_scales_response(monkeypatch):
     class FakeResponse:
         def __init__(self, payload):
             self._payload = payload
+            self.status_code = 200
 
         def raise_for_status(self):
             pass

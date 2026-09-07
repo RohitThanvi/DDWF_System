@@ -25,6 +25,7 @@ async def test_fetch_coarse_patch_batches_large_grids(monkeypatch):
     class FakeResponse:
         def __init__(self, n_points):
             self.n_points = n_points
+            self.status_code = 200
 
         def raise_for_status(self):
             pass
@@ -78,6 +79,8 @@ async def test_fetch_coarse_patch_small_grid_single_request(monkeypatch):
     call_count = 0
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 

@@ -73,8 +73,12 @@ async def _fetch_historical_grid(
     archive API hits the same URL-length 414 as the forecast API on
     larger grids (fine_grid=32 -> 1024 points in one URL is well past
     what the server accepts, regardless of Open-Meteo's documented
-    1000-location count limit, which is a separate thing from URL length)."""
+    1000-location count limit, which is a separate thing from URL length).
+    Retries with backoff on 429s and pauses briefly between chunks -- with
+    several AOIs each issuing ~11 chunked requests back-to-back, hitting a
+    fair-use rate limit is expected, not a sign anything is broken."""
     from app.data.external_forecast import MAX_COORDS_PER_REQUEST, _grid_points
+    from app.data.http_utils import get_with_retry
 
     points = _grid_points(bbox, grid_size)
     locations: list[dict] = []
@@ -88,10 +92,11 @@ async def _fetch_historical_grid(
             "end_date": day.isoformat(),
             "timezone": "UTC",
         }
-        resp = await client.get(ARCHIVE_URL, params=params)
-        resp.raise_for_status()
+        resp = await get_with_retry(client, ARCHIVE_URL, params)
         payload = resp.json()
         locations.extend(payload if isinstance(payload, list) else [payload])
+        if i + MAX_COORDS_PER_REQUEST < len(points):
+            await asyncio.sleep(0.3)
 
     data = np.zeros((len(variables), grid_size, grid_size), dtype=np.float32)
     for idx, loc in enumerate(locations):
@@ -157,6 +162,9 @@ async def build_manifest(args: argparse.Namespace) -> None:
                 "fine_grid": args.fine_grid,
             })
             print(f"[{i}] wrote {pair_path} (bbox={bbox}, date={day})")
+
+            if i < args.n_aois - 1:
+                await asyncio.sleep(1.0)  # spread load across AOIs, on top of the per-chunk delay above
 
     with open(args.manifest_out, "w") as f:
         json.dump(manifest, f, indent=2)
