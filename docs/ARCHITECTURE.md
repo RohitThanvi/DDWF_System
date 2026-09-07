@@ -82,7 +82,11 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
   `/vsicurl/` driver — no full-tile download despite tiles running into the
   hundreds of MB. An AOI that straddles a WorldCover tile boundary is
   approximated using only the tile containing the AOI center; see
-  `LandCoverClient`'s docstring.
+  `LandCoverClient`'s docstring. Land surface temperature comes from a
+  third pattern again: ORNL DAAC's free MODIS/VIIRS subset REST API
+  (`LSTClient`) — a two-call flow (list available composite dates, then
+  fetch the most recent one) since MOD11A2 is an 8-day composite, not a
+  live reading.
 - **Per-AOI caching.** `CoarseForecastService` caches by rounded bbox +
   grid size + horizon, so repeated queries for the same AOI within a
   request burst don't re-hit Open-Meteo.
@@ -94,13 +98,14 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
 ## Known gaps you should close before this is production-real
 
 1. `TerrainFusionService.fetch_raster_patch` now fetches **real**
-   elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90) and
-   **real** land-cover class fractions — vegetation/built-up/water/bare-
-   or-snow — from ESA WorldCover 10m, read directly off its public S3 COG
-   via HTTP range requests (no download, no key). The LST channel is still
-   a documented stub (zeros) — MODIS LST requires a NASA Earthdata login,
-   a materially different access pattern than the other two free sources;
-   wire it up once that's worth the friction (see `docs/TRAINING.md`).
+   elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90),
+   **real** land-cover class fractions from ESA WorldCover 10m (public S3
+   COG, HTTP range requests, no key), and **real** land surface
+   temperature from MODIS MOD11A2 via ORNL DAAC's free key-less subset
+   service. All 8 terrain channels are now real — there is no remaining
+   stub channel. (MODIS LST initially looked like it would need a NASA
+   Earthdata login, the usual path for MODIS data, but ORNL DAAC's
+   subsetting service turned out to be genuinely key-less too.)
 2. The downscaler and SIREN terrain field ship with **randomly-initialized
    weights** — `scripts/build_aoi_pairs_manifest.py` +
    `training/train_downscaler.py` now form a real, runnable pipeline to

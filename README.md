@@ -40,10 +40,11 @@ How to actually train the downscaler: [`docs/TRAINING.md`](docs/TRAINING.md).
 - **Downscaling head (Module 3, the trainable core):** conditional
   diffusion U-Net (DDPM/EDM-style) with cross-attention to the coarse
   forecast, distilled DDIM sampler for low-latency serving, plus a SIREN
-  implicit terrain field for zero-shot unmapped-AOI inference. Real
-  elevation/slope/aspect (Open-Meteo Elevation API, Copernicus GLO-90) and
-  real land-cover class fractions (ESA WorldCover 10m, read directly off
-  S3, no key); LST remains a documented stub (needs a NASA Earthdata login).
+  implicit terrain field for zero-shot unmapped-AOI inference. All 8
+  terrain conditioning channels are real and key-less: elevation/slope/
+  aspect (Open-Meteo Elevation API, Copernicus GLO-90), land-cover class
+  fractions (ESA WorldCover 10m, S3), and land surface temperature (MODIS
+  MOD11A2 via ORNL DAAC's free subset service).
 - **Ensembling (Module 4):** diffusion-seed perturbation aggregated to
   p10/p50/p90 with an explicit low-skill flag past Day 10
 - **Optional upgrade path:** the original SFNO global engine (Module 2) —
@@ -124,10 +125,14 @@ tests/         pytest suite (API, model shape, and training-data-pipeline smoke 
 ## Status
 
 Architecture, API surface, and model code are implemented and tested
-(`pytest -q` passes end-to-end — 14 tests, including a real read of the
-training-data pipeline and a real forward pass through the actual serving
-code path). **No trained downscaler checkpoint ships in this repo** —
+(`pytest -q` passes end-to-end — 17 tests, including a real read of the
+training-data pipeline, a real forward pass through the actual serving
+code path, and real (mocked-network) parsing of the MODIS LST response
+schema). **No trained downscaler checkpoint ships in this repo** —
 `scripts/build_aoi_pairs_manifest.py` + `training/train_downscaler.py` are
 a real, runnable pipeline to build one; see `docs/TRAINING.md` for the
-honest ~1.5-2 week path from here to real weights, and exactly what's real
-training signal vs. documented proxy/stub.
+honest ~1.5-2 week path from here to real weights. All 8 terrain
+conditioning channels are real, key-less data (elevation/slope/aspect,
+land-cover fractions, land surface temperature) — the coarse forecast
+proxy used as the training target is the one remaining documented
+approximation, not a fabricated stub.

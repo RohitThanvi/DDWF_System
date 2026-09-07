@@ -39,16 +39,15 @@ ground truth) for the same place and time. Three pieces:
   conditioning input, the dense query becomes the training target (see the
   script's docstring for exactly why this is a defensible, if imperfect,
   proxy pairing, and what it is not a substitute for).
-- **Terrain raster (DEM/LULC/LST)** — the DEM channels (elevation, slope,
-  aspect) and the LULC channels (vegetation/built-up/water/bare-or-snow
-  fractions) are both fetched for real by the same script — DEM from
-  Open-Meteo's Elevation API (Copernicus GLO-90), LULC from ESA
-  WorldCover 10m read directly off its public S3 bucket via HTTP range
-  requests (`app/data/terrain_sources.py`). LST remains the one stub
-  channel (zeros) — it needs a NASA Earthdata login, unlike the other two
-  free/key-less sources:
-  - LST: MODIS LST (free via NASA Earthdata) —
-    https://appeears.earthdatacloud.nasa.gov
+- **Terrain raster (DEM/LULC/LST)** — all three are fetched for real by the
+  same script: DEM (elevation, slope, aspect) from Open-Meteo's Elevation
+  API (Copernicus GLO-90), LULC (vegetation/built-up/water/bare-or-snow
+  fractions) from ESA WorldCover 10m read directly off its public S3
+  bucket, and LST from MODIS MOD11A2 via ORNL DAAC's free subset REST API
+  (`app/data/terrain_sources.py`). None of the three needs an account or
+  key — MODIS LST looked at first like it would need a NASA Earthdata
+  login (the usual path for MODIS data), but ORNL DAAC's subsetting
+  service turned out to be genuinely key-less.
 - **Hi-res ground truth** — Option B's default is the dense Open-Meteo
   query above (a real, if approximate, signal). For a genuinely better
   target once the pipeline is proven out: station observations near your

@@ -10,13 +10,12 @@ LULC (land use/land cover): ESA WorldCover 10m v200, read directly off its
 public AWS COG bucket via HTTP range requests (no download, no key) — see
 `LandCoverClient` below.
 
-LST (land surface temperature) does NOT have an equivalently trivial free/
-key-less source at the time of writing — MODIS LST requires a NASA
-Earthdata login and a different access pattern (Earthdata Cloud / AppEEARS)
-than the simple HTTP-range-read pattern the other two sources use. It
-stays an explicit, documented stub (`STUB_LST_CHANNELS`) rather than a
-fabricated number, so it's always clear in the data exactly what's real
-signal and what isn't yet — see `TerrainFusionService.fetch_raster_patch`.
+LST (land surface temperature): MODIS MOD11A2, fetched via ORNL DAAC's free
+REST subset service (https://modis.ornl.gov) — also no key, no account.
+This one initially looked like it would need a NASA Earthdata login (the
+usual path for MODIS data), but ORNL DAAC's subsetting service turned out
+to be genuinely key-less; see `LSTClient` below. All three terrain sources
+are real as a result — there is no remaining stub channel.
 """
 from __future__ import annotations
 
@@ -84,16 +83,17 @@ def slope_aspect_from_elevation(elevation: np.ndarray, cell_size_m: float = 1000
 # index 2: aspect (real, derived)
 # index 3-6: LULC class-group fractions (real, ESA WorldCover 10m v200 —
 #            see LandCoverClient below): vegetation, built-up, water, bare/snow
-# index 7: LST (STUB — zeros until a real key-less LST source is wired;
-#          MODIS LST requires a NASA Earthdata login, unlike the other
-#          three sources, which is why it's the one channel left as zeros)
+# index 7: LST (real, MODIS MOD11A2 via ORNL DAAC — see LSTClient below;
+#          8-day composite, so treat as a slow surface-heating signal, not
+#          live temperature)
 REAL_DEM_CHANNELS = 3
 REAL_LULC_CHANNELS = 4
-STUB_LST_CHANNELS = 1
-TOTAL_TERRAIN_CHANNELS = REAL_DEM_CHANNELS + REAL_LULC_CHANNELS + STUB_LST_CHANNELS
+REAL_LST_CHANNELS = 1
+TOTAL_TERRAIN_CHANNELS = REAL_DEM_CHANNELS + REAL_LULC_CHANNELS + REAL_LST_CHANNELS
 
-# Backward-compatible alias (old name implied "stub"; LULC is real now)
+# Backward-compatible aliases (old names implied "stub"; both are real now)
 STUB_LULC_CHANNELS = REAL_LULC_CHANNELS
+STUB_LST_CHANNELS = REAL_LST_CHANNELS
 
 
 WORLDCOVER_BASE_URL = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map"
@@ -183,3 +183,90 @@ def read_lulc_fractions(src, bbox: tuple[float, float, float, float], target_siz
         fractions[g_idx] = resized[:target_size, :target_size]
 
     return fractions
+
+
+# --- LST (land surface temperature): MODIS via ORNL DAAC's free,
+# key-less REST subset service (https://modis.ornl.gov). Confirmed
+# key-less and confirmed response schema (nrows/ncols/xllcorner/yllcorner
+# + per-band 'data' arrays, reshape to (nrows, ncols)) against ORNL DAAC's
+# own published documentation and tutorials before writing this client —
+# this is a materially different, and pleasantly simpler, access pattern
+# than NASA Earthdata/AppEEARS, which is why LST turned out not to need an
+# account after all.
+MODIS_BASE_URL = "https://modis.ornl.gov/rst/api/v1"
+MODIS_LST_PRODUCT = "MOD11A2"      # Terra, 8-day composite, 1km
+MODIS_LST_BAND = "LST_Day_1km"
+MODIS_LST_SCALE = 0.02             # raw DN -> Kelvin
+MODIS_LST_FILL = 0                 # raw DN used for invalid/no-data pixels
+MODIS_MAX_HALF_WINDOW_KM = 100     # service-enforced cap on kmAboveBelow/kmLeftRight
+
+
+class LSTClient:
+    """Fetches the most recent available MOD11A2 daytime LST composite for
+    an AOI from ORNL DAAC's free subset service — no key, no account.
+    8-day compositing means this is never "right now" temperature; treat it
+    as a slowly-varying land-surface-heating conditioning signal, not a
+    live temperature reading (the coarse forecast's temperature_2m variable
+    is the live signal; this is a complementary, surface-specific one)."""
+
+    def __init__(self, base_url: str = MODIS_BASE_URL, timeout_s: float = 20.0):
+        self.base_url = base_url
+        self.timeout_s = timeout_s
+
+    async def _latest_modis_date(self, lat: float, lon: float, client) -> str | None:
+        resp = await client.get(
+            f"{self.base_url}/{MODIS_LST_PRODUCT}/dates", params={"latitude": lat, "longitude": lon}
+        )
+        resp.raise_for_status()
+        dates = resp.json().get("dates", [])
+        if not dates:
+            return None
+        return dates[-1]["modis_date"]  # API returns dates in chronological order
+
+    async def fetch_lst_patch(self, bbox: tuple[float, float, float, float], target_size: int) -> np.ndarray:
+        """Returns (1, target_size, target_size) LST in Celsius, resampled
+        from the native ~1km MODIS grid. Falls back to zeros (with a
+        logged warning) if the service has no composite for this AOI, e.g.
+        persistent cloud cover at the latest date."""
+        import httpx
+        from scipy.ndimage import zoom as _zoom
+
+        min_lon, min_lat, max_lon, max_lat = bbox
+        center_lat, center_lon = (min_lat + max_lat) / 2, (min_lon + max_lon) / 2
+        width_km = abs(max_lon - min_lon) * 111 * np.cos(np.radians(center_lat))
+        height_km = abs(max_lat - min_lat) * 111
+        km_lr = int(np.clip(round(width_km / 2), 1, MODIS_MAX_HALF_WINDOW_KM))
+        km_ab = int(np.clip(round(height_km / 2), 1, MODIS_MAX_HALF_WINDOW_KM))
+
+        async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            modis_date = await self._latest_modis_date(center_lat, center_lon, client)
+            if modis_date is None:
+                log.warning("terrain_fusion.lst_no_dates_available", lat=center_lat, lon=center_lon)
+                return np.zeros((1, target_size, target_size), dtype=np.float32)
+
+            resp = await client.get(
+                f"{self.base_url}/{MODIS_LST_PRODUCT}/subset",
+                params={
+                    "latitude": center_lat, "longitude": center_lon, "band": MODIS_LST_BAND,
+                    "startDate": modis_date, "endDate": modis_date,
+                    "kmAboveBelow": km_ab, "kmLeftRight": km_lr,
+                },
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+
+        subset = payload.get("subset", [])
+        nrows, ncols = payload.get("nrows"), payload.get("ncols")
+        if not subset or not nrows or not ncols:
+            log.warning("terrain_fusion.lst_empty_subset", lat=center_lat, lon=center_lon)
+            return np.zeros((1, target_size, target_size), dtype=np.float32)
+
+        raw = np.array(subset[0]["data"], dtype=np.float32).reshape(nrows, ncols)
+        valid = raw != MODIS_LST_FILL
+        lst_celsius = np.where(valid, raw * MODIS_LST_SCALE - 273.15, np.nan)
+        fill_value = float(np.nanmean(lst_celsius)) if np.any(valid) else 0.0
+        lst_celsius = np.nan_to_num(lst_celsius, nan=fill_value)
+
+        scale = (target_size / nrows, target_size / ncols)
+        resized = _zoom(lst_celsius, scale, order=1)
+        return resized[:target_size, :target_size][np.newaxis, :, :].astype(np.float32)

@@ -1,7 +1,10 @@
 """Pure-math tests for terrain derivation — no network calls."""
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
+import pytest
 
 from app.data.terrain_sources import slope_aspect_from_elevation
 
@@ -70,3 +73,53 @@ def test_read_lulc_fractions_from_synthetic_raster():
     assert built_up[:, :3].mean() > 0.7
     assert water[:, 5:].mean() > 0.7
     assert veg.mean() < 0.1 and bare.mean() < 0.1
+
+
+@pytest.mark.anyio
+async def test_lst_client_parses_and_scales_response(monkeypatch):
+    """Mocks the two ORNL DAAC HTTP calls (dates, subset) and checks the
+    scale factor (raw DN * 0.02 -> Kelvin -> Celsius) and fill-value
+    handling are correct -- no network access needed."""
+    from app.data.terrain_sources import LSTClient
+
+    # 2x2 raw grid: three valid pixels at ~300K, one fill (0) pixel
+    raw_data = [15000, 15000, 15000, 0]  # 15000 * 0.02 = 300.0K = 26.85C
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, params=None):
+            if url.endswith("/dates"):
+                return FakeResponse({"dates": [{"modis_date": "A2024001", "calendar_date": "2024-01-01"}]})
+            return FakeResponse({
+                "nrows": 2, "ncols": 2,
+                "subset": [{"data": raw_data, "modis_date": "A2024001"}],
+            })
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    client = LSTClient()
+    result = await client.fetch_lst_patch((75.0, 26.0, 75.1, 26.1), target_size=4)
+
+    assert result.shape == (1, 4, 4)
+    # valid pixels should read ~26.85C; the fill pixel gets replaced with
+    # the patch mean rather than propagating as a discontinuity
+    assert 20.0 < result.mean() < 30.0

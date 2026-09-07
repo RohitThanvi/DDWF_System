@@ -18,9 +18,9 @@ from scipy.ndimage import zoom
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.data.terrain_sources import (
-    STUB_LST_CHANNELS,
     ElevationClient,
     LandCoverClient,
+    LSTClient,
     slope_aspect_from_elevation,
 )
 from app.models.siren import TerrainSIREN
@@ -37,6 +37,7 @@ class TerrainFusionService:
         self.siren = TerrainSIREN().to(self.device).eval()
         self.elevation_client = ElevationClient()
         self.lulc_client = LandCoverClient()
+        self.lst_client = LSTClient()
 
     @classmethod
     def instance(cls) -> "TerrainFusionService":
@@ -47,15 +48,16 @@ class TerrainFusionService:
     async def fetch_raster_patch(
         self, bbox: tuple[float, float, float, float], resolution_m: int = 100, target_size: int = 256
     ) -> np.ndarray:
-        """Returns (C=8, target_size, target_size): real elevation/slope/
-        aspect from Open-Meteo/Copernicus GLO-90 and real land-cover class
-        fractions (vegetation/built-up/water/bare-or-snow) from ESA
-        WorldCover 10m, both upsampled/resampled to `target_size` (native
-        DEM/LULC resolution runs out well before typical AOI target
-        resolutions of 100m-1km, which is exactly why the diffusion head
-        exists: it learns to hallucinate plausible sub-native-resolution
-        structure rather than just upsampling terrain linearly). The LST
-        channel is zeros (see app/data/terrain_sources.py for why)."""
+        """Returns (C=8, target_size, target_size), all channels real:
+        elevation/slope/aspect from Open-Meteo/Copernicus GLO-90, land-cover
+        class fractions (vegetation/built-up/water/bare-or-snow) from ESA
+        WorldCover 10m, and land surface temperature from MODIS MOD11A2 (an
+        8-day composite, so treat it as a slow surface-heating signal
+        rather than live temperature). Native DEM/LULC/LST resolution runs
+        out well before typical AOI target resolutions of 100m-1km, which
+        is exactly why the diffusion head exists: it learns to hallucinate
+        plausible sub-native-resolution structure rather than just
+        upsampling terrain linearly."""
         min_lon, min_lat, max_lon, max_lat = bbox
         approx_width_m = abs(max_lon - min_lon) * 111_000 * np.cos(np.radians((min_lat + max_lat) / 2))
         query_grid = min(32, max(4, int(approx_width_m / max(resolution_m, 90))))
@@ -84,10 +86,14 @@ class TerrainFusionService:
             log.warning("terrain_fusion.lulc_fetch_failed", error=str(exc))
             lulc_fractions = np.zeros((4, target_size, target_size), dtype=np.float32)
 
-        lst_stub = np.zeros((STUB_LST_CHANNELS, target_size, target_size), dtype=np.float32)
+        try:
+            lst = await self.lst_client.fetch_lst_patch(bbox, target_size)
+        except Exception as exc:
+            log.warning("terrain_fusion.lst_fetch_failed", error=str(exc))
+            lst = np.zeros((1, target_size, target_size), dtype=np.float32)
 
         dem_stack = np.stack([elevation_hi, slope_hi, aspect_hi]).astype(np.float32)
-        return np.concatenate([dem_stack, lulc_fractions, lst_stub], axis=0)
+        return np.concatenate([dem_stack, lulc_fractions, lst], axis=0)
 
     def implicit_terrain_embedding(self, lat: float, lon: float, raster_feats: np.ndarray) -> np.ndarray:
         """Zero-shot path (Module 3): query the SIREN field directly for

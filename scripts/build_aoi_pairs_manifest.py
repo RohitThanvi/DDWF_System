@@ -16,10 +16,11 @@ diffusion downscaler, using only free/key-less sources:
     pipeline, and swap in real station/satellite hi-res data
     (see docs/TRAINING.md) once this path is working end-to-end.
   - Terrain: real elevation/slope/aspect from Open-Meteo's Elevation API
-    (Copernicus GLO-90) and real land-cover class fractions from ESA
-    WorldCover 10m (read directly off its public S3 COG, no key) — see
-    app/data/terrain_sources.py. LST remains the one documented stub
-    channel (zeros) until a real key-less source is available.
+    (Copernicus GLO-90), real land-cover class fractions from ESA
+    WorldCover 10m (public S3 COG, no key), and real land surface
+    temperature from MODIS MOD11A2 via ORNL DAAC's free key-less subset
+    service — see app/data/terrain_sources.py. All three terrain channels
+    are real; there is no remaining stub.
 
 Usage:
   python scripts/build_aoi_pairs_manifest.py \
@@ -91,7 +92,7 @@ async def build_manifest(args: argparse.Namespace) -> None:
     import httpx
 
     from app.data.external_forecast import OPEN_METEO_VARIABLES
-    from app.data.terrain_sources import ElevationClient, LandCoverClient, slope_aspect_from_elevation
+    from app.data.terrain_sources import ElevationClient, LandCoverClient, LSTClient, slope_aspect_from_elevation
 
     region = tuple(float(v) for v in args.region.split(","))
     start = date.fromisoformat(args.start_date)
@@ -103,6 +104,7 @@ async def build_manifest(args: argparse.Namespace) -> None:
     rng = random.Random(args.seed)
     elevation_client = ElevationClient()
     lulc_client = LandCoverClient()
+    lst_client = LSTClient()
 
     manifest: list[dict] = []
 
@@ -116,6 +118,7 @@ async def build_manifest(args: argparse.Namespace) -> None:
                 target = await _fetch_historical_grid(bbox, args.fine_grid, day, OPEN_METEO_VARIABLES, client)
                 elevation = await elevation_client.fetch_elevation_grid(bbox, grid_size=args.fine_grid)
                 lulc_fractions = await asyncio.to_thread(lulc_client.fetch_lulc_patch, bbox, args.fine_grid)
+                lst = await lst_client.fetch_lst_patch(bbox, args.fine_grid)
             except Exception as exc:
                 print(f"[{i}] skip (fetch failed): {exc}")
                 continue
@@ -123,9 +126,8 @@ async def build_manifest(args: argparse.Namespace) -> None:
             approx_width_m = abs(bbox[2] - bbox[0]) * 111_000
             cell_size_m = approx_width_m / max(args.fine_grid - 1, 1)
             slope, aspect = slope_aspect_from_elevation(elevation, cell_size_m=cell_size_m)
-            lst_stub = np.zeros((1, args.fine_grid, args.fine_grid), dtype=np.float32)
             terrain = np.concatenate(
-                [np.stack([elevation, slope, aspect]), lulc_fractions, lst_stub], axis=0
+                [np.stack([elevation, slope, aspect]), lulc_fractions, lst], axis=0
             ).astype(np.float32)
 
             pair_path = out_dir / f"pair_{i:05d}.npz"
