@@ -21,3 +21,5 @@ wandb/
 *.log
 .idea/
 .vscode/
+lightning_logs/
+outputs/

@@ -37,10 +37,18 @@ import argparse
 import asyncio
 import json
 import random
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
+
+# Make `app.*` importable when this script is run directly
+# (`python scripts/build_aoi_pairs_manifest.py`) rather than as a module
+# from the repo root — direct script execution puts scripts/ on sys.path,
+# not the repo root, so `from app.data...` would otherwise fail with
+# ModuleNotFoundError regardless of the current working directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 RAJASTHAN_BBOX = (69.5, 23.0, 78.3, 30.2)
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"

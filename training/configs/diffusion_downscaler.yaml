@@ -42,10 +42,20 @@ attention_backend: standard  # nn.MultiheadAttention (app/models/layers.py). fla
 
 trainer:
   max_epochs: 100
-  accelerator: gpu
+  accelerator: auto  # picks GPU if available, falls back to CPU -- "gpu" here would hard-fail on a machine with no CUDA device, e.g. a laptop
   devices: auto
   log_every_n_steps: 50
 
 mlflow:
   tracking_uri: ./mlruns
   experiment_name: ddwf-downscaler
+
+hydra:
+  job:
+    chdir: false  # keep the launch directory as CWD -- this config's relative
+                  # paths (data.manifest_path, the checkpoint save path in
+                  # train_downscaler.py) are written relative to where you run
+                  # the command, not to Hydra's per-run output directory,
+                  # which is what you get without this
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}  # Hydra's own logs/config snapshot still go here, just doesn't become CWD

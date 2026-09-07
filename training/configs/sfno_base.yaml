@@ -54,7 +54,7 @@ strategy: deepspeed_stage_3_offload   # only if <8 GPUs, see docs/TRAINING.md
 
 trainer:
   max_epochs: 40
-  accelerator: gpu
+  accelerator: auto  # picks GPU if available, falls back to CPU -- "gpu" here would hard-fail without a CUDA device
   devices: auto
   log_every_n_steps: 50
   val_check_interval: 0.25
@@ -62,3 +62,9 @@ trainer:
 mlflow:
   tracking_uri: ./mlruns
   experiment_name: ddwf-global-engine
+
+hydra:
+  job:
+    chdir: false  # keep the launch directory as CWD -- see diffusion_downscaler.yaml for why
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
