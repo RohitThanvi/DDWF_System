@@ -1,0 +1,18 @@
+# Option A only (train the SFNO global engine yourself -- see
+# docs/TRAINING.md "Option A"). Not required for the default Option B
+# path (training the downscaler). These are genuinely fragile to install:
+# xesmf needs the ESMF C library on your system, torch-harmonics compiles
+# CUDA extensions (needs a CUDA toolchain, won't build on Windows/CPU-only
+# machines), deepspeed doesn't support Windows at all. Expect to run this
+# on Linux with a CUDA GPU, likely in a container, not on a laptop.
+-r requirements-train.txt
+
+xarray==2024.9.0
+zarr==2.18.3
+dask[array]==2024.9.1
+torch-harmonics==0.6.5
+kerchunk==0.2.6
+intake-esm==2024.2.6
+xesmf==0.8.5
+pvlib==0.11.0
+deepspeed==0.15.1

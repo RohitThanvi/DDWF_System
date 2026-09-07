@@ -36,7 +36,9 @@ optim:
   warmup_steps: 500
 
 precision: bf16-mixed
-attention_backend: flash_attention_2
+attention_backend: standard  # nn.MultiheadAttention (app/models/layers.py). flash_attention_2 would need
+                              # rewiring the model + adding flash-attn back to requirements-train.txt -- not
+                              # done yet, see that file's comment on why it's deliberately left out
 
 trainer:
   max_epochs: 100

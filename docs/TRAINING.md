@@ -64,6 +64,13 @@ python scripts/build_aoi_pairs_manifest.py \
     --n-aois 40 --coarse-grid 8 --fine-grid 32 \
     --out-dir ./data/aoi_pairs --manifest-out ./data/aoi_pairs_manifest.json
 ```
+**Windows PowerShell:** the `\` line-continuation above is bash/zsh syntax
+and does nothing useful in PowerShell (it'll try to run each line as a
+separate command). Either use PowerShell's backtick continuation or just
+put it all on one line:
+```powershell
+python scripts/build_aoi_pairs_manifest.py --region 69.5,23.0,78.3,30.2 --start-date 2024-01-01 --end-date 2024-01-31 --n-aois 40 --coarse-grid 8 --fine-grid 32 --out-dir ./data/aoi_pairs --manifest-out ./data/aoi_pairs_manifest.json
+```
 The default region is Rajasthan — change `--region` for wherever you have
 the best ground-truth station access. **Start with `--n-aois 40` or so** to
 validate the pipeline end-to-end before scaling up to hundreds/thousands of
