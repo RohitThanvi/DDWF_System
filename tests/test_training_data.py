@@ -8,7 +8,7 @@ import json
 import numpy as np
 import pytest
 
-from training.train_downscaler import AOIPairDataset
+from training.data import AOIPairDataset
 
 
 @pytest.fixture
