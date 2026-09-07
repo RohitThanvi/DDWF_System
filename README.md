@@ -83,6 +83,14 @@ whether one is present.
 docker compose up --build
 ```
 
+## Deploying
+
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — short version: **Render's
+free tier (512MB RAM) will not run this service.** Measured on this exact
+codebase, `import torch` alone uses ~500MB RSS before a single request is
+handled. Render's Standard plan (2GB RAM) or an alternative like Hugging
+Face Spaces / Google Cloud Run is the realistic path.
+
 ## Calling it from Vayu
 
 ```python
