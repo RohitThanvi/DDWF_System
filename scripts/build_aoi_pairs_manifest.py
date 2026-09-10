@@ -29,7 +29,12 @@ Usage:
       --n-aois 40 --coarse-grid 8 --fine-grid 32 \
       --out-dir ./data/aoi_pairs --manifest-out ./data/aoi_pairs_manifest.json
 
-Default region is Rajasthan, India.
+Default region is Rajasthan, India. If you see repeated 429s even with the
+built-in retry logic, you're likely hitting a temporary rate-limit window
+from an earlier unthrottled run rather than the endpoint's actual capacity
+(Open-Meteo documents 600 requests/minute, which this script stays well
+under once paced) — wait a few minutes, then retry with a slower pace:
+  --chunk-delay-s 3 --aoi-delay-s 10 --max-retries 10 --retry-base-delay-s 5
 """
 from __future__ import annotations
 
@@ -67,6 +72,9 @@ async def _fetch_historical_grid(
     day: date,
     variables: list[str],
     client,
+    chunk_delay_s: float = 1.5,
+    max_retries: int = 8,
+    retry_base_delay_s: float = 3.0,
 ) -> np.ndarray:
     """Returns (n_vars, grid_size, grid_size) at 12:00 UTC on `day`.
     Batches into <=MAX_COORDS_PER_REQUEST-coordinate requests -- the
@@ -74,9 +82,14 @@ async def _fetch_historical_grid(
     larger grids (fine_grid=32 -> 1024 points in one URL is well past
     what the server accepts, regardless of Open-Meteo's documented
     1000-location count limit, which is a separate thing from URL length).
-    Retries with backoff on 429s and pauses briefly between chunks -- with
-    several AOIs each issuing ~11 chunked requests back-to-back, hitting a
-    fair-use rate limit is expected, not a sign anything is broken."""
+    Retries with backoff on 429s and pauses briefly between chunks --
+    generous defaults on purpose: this is an offline, one-off data-prep
+    script, not a live request, so it's worth waiting several minutes to
+    succeed rather than failing fast. `max_retries=8` with
+    `retry_base_delay_s=3.0` gives a cumulative backoff window of several
+    minutes, which matters because a burst of unthrottled requests (e.g.
+    from before this retry logic existed) can get an IP flagged for
+    longer than a few seconds of backoff would cover."""
     from app.data.external_forecast import MAX_COORDS_PER_REQUEST, _grid_points
     from app.data.http_utils import get_with_retry
 
@@ -92,11 +105,13 @@ async def _fetch_historical_grid(
             "end_date": day.isoformat(),
             "timezone": "UTC",
         }
-        resp = await get_with_retry(client, ARCHIVE_URL, params)
+        resp = await get_with_retry(
+            client, ARCHIVE_URL, params, max_retries=max_retries, base_delay_s=retry_base_delay_s
+        )
         payload = resp.json()
         locations.extend(payload if isinstance(payload, list) else [payload])
         if i + MAX_COORDS_PER_REQUEST < len(points):
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(chunk_delay_s)
 
     data = np.zeros((len(variables), grid_size, grid_size), dtype=np.float32)
     for idx, loc in enumerate(locations):
@@ -135,11 +150,24 @@ async def build_manifest(args: argparse.Namespace) -> None:
             day = start + timedelta(days=rng.randrange(n_days))
 
             try:
-                coarse = await _fetch_historical_grid(bbox, args.coarse_grid, day, OPEN_METEO_VARIABLES, client)
-                target = await _fetch_historical_grid(bbox, args.fine_grid, day, OPEN_METEO_VARIABLES, client)
-                elevation = await elevation_client.fetch_elevation_grid(bbox, grid_size=args.fine_grid)
+                coarse = await _fetch_historical_grid(
+                    bbox, args.coarse_grid, day, OPEN_METEO_VARIABLES, client,
+                    chunk_delay_s=args.chunk_delay_s, max_retries=args.max_retries,
+                    retry_base_delay_s=args.retry_base_delay_s,
+                )
+                target = await _fetch_historical_grid(
+                    bbox, args.fine_grid, day, OPEN_METEO_VARIABLES, client,
+                    chunk_delay_s=args.chunk_delay_s, max_retries=args.max_retries,
+                    retry_base_delay_s=args.retry_base_delay_s,
+                )
+                elevation = await elevation_client.fetch_elevation_grid(
+                    bbox, grid_size=args.fine_grid, chunk_delay_s=args.chunk_delay_s,
+                    max_retries=args.max_retries, retry_base_delay_s=args.retry_base_delay_s,
+                )
                 lulc_fractions = await asyncio.to_thread(lulc_client.fetch_lulc_patch, bbox, args.fine_grid)
-                lst = await lst_client.fetch_lst_patch(bbox, args.fine_grid)
+                lst = await lst_client.fetch_lst_patch(
+                    bbox, args.fine_grid, max_retries=args.max_retries, retry_base_delay_s=args.retry_base_delay_s,
+                )
             except Exception as exc:
                 print(f"[{i}] skip (fetch failed): {exc}")
                 continue
@@ -164,7 +192,7 @@ async def build_manifest(args: argparse.Namespace) -> None:
             print(f"[{i}] wrote {pair_path} (bbox={bbox}, date={day})")
 
             if i < args.n_aois - 1:
-                await asyncio.sleep(1.0)  # spread load across AOIs, on top of the per-chunk delay above
+                await asyncio.sleep(args.aoi_delay_s)
 
     with open(args.manifest_out, "w") as f:
         json.dump(manifest, f, indent=2)
@@ -184,6 +212,14 @@ def main() -> None:
     parser.add_argument("--out-dir", default="./data/aoi_pairs")
     parser.add_argument("--manifest-out", default="./data/aoi_pairs_manifest.json")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--chunk-delay-s", type=float, default=1.5,
+                         help="Pause between chunked requests within one AOI fetch. Increase if you keep seeing 429s.")
+    parser.add_argument("--aoi-delay-s", type=float, default=5.0,
+                         help="Pause between AOIs. Increase if you keep seeing 429s.")
+    parser.add_argument("--max-retries", type=int, default=8,
+                         help="Retries per request on 429/5xx before giving up on that AOI. This is an offline script -- generous by default.")
+    parser.add_argument("--retry-base-delay-s", type=float, default=3.0,
+                         help="Base for exponential backoff between retries (ignored if the server sends a Retry-After header).")
     args = parser.parse_args()
 
     asyncio.run(build_manifest(args))
