@@ -19,6 +19,7 @@ data:
   # coarse/fine pairs + real elevation-derived terrain — see that script's
   # docstring and docs/TRAINING.md for exactly what's real vs. proxy/stub).
   manifest_path: ./data/aoi_pairs_manifest.json
+  stats_path: ./data/open_meteo_variable_stats.json  # per-variable normalization priors, see app/data/normalization.py
   aoi_patch_size: 32       # must match --fine-grid passed to build_aoi_pairs_manifest.py
   batch_size: 8
   grad_accum_steps: 4

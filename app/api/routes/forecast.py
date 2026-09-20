@@ -69,9 +69,9 @@ async def forecast(req: ForecastRequest) -> ForecastResponse:
         for _seed in range(3):  # model-form perturbation via diffusion sampling seed; small for a single request
             member = downscaler.downscale(coarse_patch, raster, coarse_tokens)
             members.append(member)
-        members_arr = np.stack(members)[None, ...]  # (1, M, C, H, W)
+        members_arr = np.stack(members)  # (M, C, H, W)
 
-        agg = ensembler.aggregate(members_arr[0][None, ...])
+        agg = ensembler.aggregate(members_arr)  # dict of p10/p50/p90, each (C, H, W)
         confidence = ensembler.confidence_flag(float(day))
 
         def _summarize(field: np.ndarray) -> dict[str, float]:
@@ -82,9 +82,9 @@ async def forecast(req: ForecastRequest) -> ForecastResponse:
             TimestepValue(
                 valid_time=datetime.now(timezone.utc),
                 lead_hours=day * 24,
-                p10=_summarize(agg["p10"][0]),
-                p50=_summarize(agg["p50"][0]),
-                p90=_summarize(agg["p90"][0]),
+                p10=_summarize(agg["p10"]),
+                p50=_summarize(agg["p50"]),
+                p90=_summarize(agg["p90"]),
                 confidence=confidence,
             )
         )

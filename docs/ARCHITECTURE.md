@@ -95,6 +95,41 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
   counts; at `l_max=180` it's tens of GB per block, so `SpectralConv` is
   depthwise with channel-mixing left to the surrounding 1x1 convs.
 
+## Serving-time correctness fixes (found via real end-to-end testing)
+
+Three real bugs surfaced once real trained weights and real requests were
+actually exercised end-to-end (not just unit-tested in isolation):
+
+- **DDIM sampler used a different noise schedule than training.**
+  `app/services/downscaler.py` had its own ad-hoc "alpha = 1 - t/1000"
+  formula instead of the cosine schedule `training/data.py` actually
+  trains under. Both now import one shared schedule from
+  `app/models/diffusion_schedule.py`.
+- **No x0-clipping.** The DDIM x0-reconstruction formula divides by
+  `sqrt(alpha_bar_t)`, which approaches zero as t -> T — any imperfection
+  in `eps_pred` (inevitable, especially early in training) gets amplified
+  into a runaway value that compounds across sampling steps. Real DDPM/
+  DDIM implementations always clip the predicted x0 to a bounded range at
+  every step ("static thresholding"); this one didn't. Fixed with
+  `X0_CLIP_VALUE` in `app/services/downscaler.py`.
+- **No data normalization.** The diffusion target stacked raw pressure
+  (~1000), wind direction (~0-360), and temperature (~20) in one tensor —
+  Gaussian diffusion implicitly assumes signal and noise are comparable
+  scale, so this was numerically unstable regardless of the two fixes
+  above. `app/data/normalization.py`'s `VariableNormalizer` existed but
+  was dead code (nothing imported it); now `training/data.py` normalizes
+  the target before training and `app/services/downscaler.py`
+  denormalizes the sampled output before returning it. Stats ship in
+  `data/open_meteo_variable_stats.json` — approximate global priors, not
+  computed climatology; see that file's comment.
+- **Ensemble aggregation used the wrong axis.**
+  `app/api/routes/forecast.py` had a shape bug
+  (`members_arr[0][None, ...]`) that made `np.percentile` compute over a
+  singleton axis, so p10/p50/p90 were always bit-for-bit identical, and
+  only 1 of the 3 sampled ensemble members ever contributed to the
+  result. Fixed; `tests/test_api.py::test_ensemble_actually_uses_all_members`
+  is a regression test that reproduces the exact failure mode if it comes back.
+
 ## Known gaps you should close before this is production-real
 
 1. `TerrainFusionService.fetch_raster_patch` now fetches **real**

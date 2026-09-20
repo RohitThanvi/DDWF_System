@@ -57,7 +57,10 @@ class DownscalerLightningModule(pl.LightningModule):
 @hydra.main(version_base=None, config_path="configs", config_name="diffusion_downscaler")
 def main(cfg: DictConfig) -> None:
     module = DownscalerLightningModule(cfg)
-    train_ds = AOIPairDataset(manifest_path=cfg.data.manifest_path, patch_size=cfg.data.aoi_patch_size)
+    train_ds = AOIPairDataset(
+        manifest_path=cfg.data.manifest_path, patch_size=cfg.data.aoi_patch_size,
+        stats_path=cfg.data.stats_path,
+    )
     train_loader = DataLoader(train_ds, batch_size=cfg.data.batch_size, num_workers=cfg.data.num_workers)
 
     trainer = pl.Trainer(

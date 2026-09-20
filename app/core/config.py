@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     coarse_forecast_provider: str = "open-meteo"
     coarse_grid_size: int = 8          # NxN sample points tiling the AOI bbox
     max_horizon_days: int = 16         # Open-Meteo's free-tier forecast horizon
+    variable_stats_path: str = "./data/open_meteo_variable_stats.json"
 
     # --- Data lake ---
     zarr_store_uri: str = "s3://ddwf-data-lake/era5.zarr"

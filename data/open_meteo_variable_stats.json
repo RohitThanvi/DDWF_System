@@ -1,0 +1,11 @@
+{
+  "_comment": "Approximate global mean/std priors for the 8 Open-Meteo variables used as the diffusion downscaler's target (see app/data/external_forecast.py: OPEN_METEO_VARIABLES). These are rough, order-of-magnitude sensible values -- NOT computed climatology -- good enough to get the diffusion process operating at a roughly-unit data scale (the actual requirement for Gaussian diffusion to behave sensibly) instead of mixing raw pressure (~1000) with raw wind direction (~0-360) with raw temperature (~20) in one tensor. Replace with real computed statistics once there's an actual archive to compute them from (see docs/TRAINING.md).",
+  "temperature_2m": {"mean": 15.0, "std": 12.0},
+  "relative_humidity_2m": {"mean": 60.0, "std": 20.0},
+  "precipitation": {"mean": 0.1, "std": 0.5},
+  "surface_pressure": {"mean": 1000.0, "std": 40.0},
+  "wind_speed_10m": {"mean": 12.0, "std": 8.0},
+  "wind_direction_10m": {"mean": 180.0, "std": 104.0},
+  "cloud_cover": {"mean": 50.0, "std": 35.0},
+  "shortwave_radiation": {"mean": 200.0, "std": 250.0}
+}

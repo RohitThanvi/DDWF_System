@@ -41,11 +41,20 @@ def client(monkeypatch):
         return np.zeros((8, 16, 16), dtype=np.float32)
 
     monkeypatch.setattr(TerrainFusionService, "fetch_raster_patch", _fake_raster_patch)
-    monkeypatch.setattr(
-        DownscalerService, "downscale",
-        lambda self, coarse_patch, terrain_raster, coarse_tokens, n_channels_out=8, n_steps=None:
-            np.zeros((n_channels_out, 16, 16), dtype=np.float32),
-    )
+
+    # Distinct, deterministic values per ensemble member/call -- the
+    # previous version of this mock returned identical zeros every call,
+    # which couldn't distinguish "ensembling correctly across 3 members"
+    # from "silently only using 1 of 3 members" (a real bug this shape
+    # of mock would never have caught; see test_ensemble_actually_uses_all_members).
+    call_count = {"n": 0}
+
+    def _fake_downscale(self, coarse_patch, terrain_raster, coarse_tokens, n_channels_out=8, n_steps=None):
+        call_count["n"] += 1
+        value = float(call_count["n"])  # member calls return 1.0, 2.0, 3.0, ...
+        return np.full((n_channels_out, 16, 16), value, dtype=np.float32)
+
+    monkeypatch.setattr(DownscalerService, "downscale", _fake_downscale)
 
     from app.main import create_app
 
@@ -84,6 +93,25 @@ def test_forecast_horizon_capped_at_16_days(client):
         json={"lat": 26.9, "lon": 75.8, "horizon_days": 30},
     )
     assert resp.status_code == 422  # Pydantic rejects horizon_days > 16
+
+
+def test_ensemble_actually_uses_all_members(client):
+    """Regression test for a real bug: a shape error
+    (members_arr[0][None, ...] double-wrapping) made np.percentile compute
+    over a singleton axis, so p10/p50/p90 were always bit-for-bit
+    identical and only 1 of the 3 sampled ensemble members ever
+    contributed to the result. The mocked downscaler returns a different
+    constant value per call (1.0, 2.0, 3.0, ...), so if aggregation is
+    wrong in that same way again, p10 == p50 == p90 here too."""
+    resp = client.post(
+        "/v1/forecast",
+        headers={"X-API-Key": "test-key"},
+        json={"lat": 26.9, "lon": 75.8, "horizon_days": 1, "variables": ["temperature_2m"]},
+    )
+    assert resp.status_code == 200
+    point = resp.json()["timeseries"][0]
+    p10, p50, p90 = point["p10"]["temperature_2m"], point["p50"]["temperature_2m"], point["p90"]["temperature_2m"]
+    assert p10 < p50 < p90, f"expected distinct increasing percentiles across 3 members, got p10={p10} p50={p50} p90={p90}"
 
 
 def test_vayu_weather_layer(client):

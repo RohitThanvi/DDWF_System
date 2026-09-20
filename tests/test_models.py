@@ -2,6 +2,7 @@
 CPU-only — these are architecture smoke tests, not accuracy tests)."""
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from app.models.diffusion_unet import DiffusionDownscaler
@@ -68,9 +69,26 @@ def test_downscaler_service_real_forward_pass():
 
     svc.model = DiffusionDownscaler(raw_token_dim=len(OPEN_METEO_VARIABLES), base_channels=8, channel_mults=(1, 2))
 
+    from app.models.diffusion_schedule import cosine_noise_schedule
+    from app.services.downscaler import DIFFUSION_TRAIN_TIMESTEPS
+
+    svc.alphas_cumprod = cosine_noise_schedule(DIFFUSION_TRAIN_TIMESTEPS)
+
+    from app.data.normalization import VariableNormalizer
+
+    svc.normalizer = VariableNormalizer("./data/open_meteo_variable_stats.json")
+
     coarse_patch = torch.randn(len(OPEN_METEO_VARIABLES), 4, 4).numpy()
     terrain_raster = torch.randn(8, 16, 16).numpy()
     coarse_tokens = coarse_patch.reshape(coarse_patch.shape[0], -1).T  # (16, n_vars) — real shape from forecast.py
 
     out = DownscalerService.downscale(svc, coarse_patch, terrain_raster, coarse_tokens, n_channels_out=8, n_steps=2)
     assert out.shape == (8, 16, 16)
+    assert np.isfinite(out).all()  # regression check for the earlier numerically-unstable sampler
+    # x0-clipping bounds the normalized output to +/-X0_CLIP_VALUE std-devs
+    # per variable, so even the widest-variance shipped stat (shortwave
+    # radiation, std=250) can't produce anything close to the ~-12500
+    # seen before the fix -- this bound is deliberately loose (an order
+    # of magnitude beyond any plausible real value) so it only fails if
+    # the blowup regresses, not on ordinary variation.
+    assert np.abs(out).max() < 10_000
