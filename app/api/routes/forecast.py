@@ -16,11 +16,13 @@ alternative to step 1 if/when DDWF trains and owns that piece — swap the
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 import numpy as np
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.schemas import ForecastRequest, ForecastResponse, TimestepValue
 from app.core.config import get_settings
@@ -46,10 +48,28 @@ async def forecast(req: ForecastRequest) -> ForecastResponse:
     downscaler = DownscalerService.instance()
     ensembler = EnsemblerService()
 
-    # 1) coarse global forecast for the AOI (Open-Meteo grid, cached)
-    coarse = await coarse_source.get_coarse_patch(
-        tuple(req.bbox), grid_size=settings.coarse_grid_size, forecast_days=req.horizon_days
-    )
+    # 1) coarse global forecast for the AOI (Open-Meteo grid, cached).
+    # Unlike terrain fetches (which already degrade to zeros internally on
+    # failure -- see TerrainFusionService), a coarse-forecast failure means
+    # there is no signal to downscale at all, so surface it as a clean
+    # 502/504 instead of letting httpx's exception propagate as a bare 500
+    # with no indication of whose fault it is.
+    try:
+        coarse = await coarse_source.get_coarse_patch(
+            tuple(req.bbox), grid_size=settings.coarse_grid_size, forecast_days=req.horizon_days
+        )
+    except httpx.TimeoutException as exc:
+        log.warning("forecast.coarse_source_timeout", request_id=request_id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Coarse forecast source (Open-Meteo) timed out. Try again shortly.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        log.error("forecast.coarse_source_error", request_id=request_id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Coarse forecast source (Open-Meteo) is unavailable. Try again shortly.",
+        ) from exc
     coarse_data = coarse["data"]  # (n_hours, n_vars, grid, grid)
 
     # 2) terrain fusion for the AOI
@@ -65,10 +85,19 @@ async def forecast(req: ForecastRequest) -> ForecastResponse:
         coarse_patch = coarse_data[hour_idx]  # (n_vars, grid, grid)
         coarse_tokens = coarse_patch.reshape(coarse_patch.shape[0], -1).T  # (grid*grid, n_vars) tokens for cross-attn
 
-        members = []
-        for _seed in range(3):  # model-form perturbation via diffusion sampling seed; small for a single request
-            member = downscaler.downscale(coarse_patch, raster, coarse_tokens)
-            members.append(member)
+        # downscaler.downscale() is synchronous, CPU-bound PyTorch inference
+        # (an n_steps-iteration DDIM sampling loop) -- calling it directly
+        # here would block the whole asyncio event loop for the entire
+        # duration, including /health and every other concurrent request,
+        # for as long as this one forecast takes to compute (multiplied by
+        # horizon_days * 3 ensemble members). asyncio.to_thread runs it in
+        # the default thread pool instead so the event loop stays free.
+        members = await asyncio.gather(
+            *(
+                asyncio.to_thread(downscaler.downscale, coarse_patch, raster, coarse_tokens)
+                for _seed in range(3)  # model-form perturbation via diffusion sampling seed
+            )
+        )
         members_arr = np.stack(members)  # (M, C, H, W)
 
         agg = ensembler.aggregate(members_arr)  # dict of p10/p50/p90, each (C, H, W)

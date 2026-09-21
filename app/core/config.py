@@ -5,7 +5,10 @@ Every other module reads config from here — never os.environ directly.
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+INSECURE_DEFAULT_API_KEY = "change-me-to-a-long-random-secret"
 
 
 class Settings(BaseSettings):
@@ -18,7 +21,30 @@ class Settings(BaseSettings):
     log_level: str = "info"
 
     # --- Auth ---
-    ddwf_api_key: str = "change-me-to-a-long-random-secret"
+    ddwf_api_key: str = INSECURE_DEFAULT_API_KEY
+
+    # --- Rate limiting (in-memory, single-process; see app/core/rate_limit.py) ---
+    rate_limit_per_minute: int = 60
+
+    @model_validator(mode="after")
+    def _reject_insecure_key_in_production(self) -> "Settings":
+        # A placeholder secret is fine for local dev (docker-compose spins
+        # up with no .env at all otherwise), but if this ever reaches
+        # env=production still on the default, every deployment shares the
+        # exact same publicly-visible-in-this-repo's-git-history bearer
+        # token -- fail startup loudly instead of serving traffic under a
+        # credential anyone can read on GitHub.
+        if self.env == "production" and self.ddwf_api_key == INSECURE_DEFAULT_API_KEY:
+            raise ValueError(
+                "DDWF_API_KEY is still the insecure default while ENV=production. "
+                "Set a real random secret (e.g. `openssl rand -hex 32`) via env var or .env."
+            )
+        if self.env == "production" and len(self.ddwf_api_key) < 32:
+            raise ValueError(
+                "DDWF_API_KEY is shorter than 32 chars while ENV=production -- "
+                "use a longer, high-entropy secret."
+            )
+        return self
 
     # --- Model checkpoints ---
     # Downscaler is the model DDWF trains and serves (Option B design — see

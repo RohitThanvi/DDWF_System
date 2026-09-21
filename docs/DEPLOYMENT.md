@@ -1,5 +1,57 @@
 # DDWF System — Deployment Guide
 
+## Production readiness checklist
+
+Fixes made to get this service safe to run with real traffic, and what's
+still on you:
+
+**Fixed in code:**
+- The Docker image previously never copied `data/` (only `app/` and
+  `checkpoints/`) — `VariableNormalizer` needs
+  `data/open_meteo_variable_stats.json` at first-request time, so every
+  real forecast request 500'd in the container despite `/health` passing
+  and all local tests being green (tests run from the repo root, where
+  `data/` naturally exists). Fixed; `docker compose up --build` now
+  actually serves a working `/v1/forecast`.
+- `downscaler.downscale()` (synchronous, CPU-bound PyTorch inference) was
+  called directly inside an `async def` route, blocking the whole asyncio
+  event loop — including `/health` — for the full duration of every
+  forecast. Now runs via `asyncio.to_thread`; the container's `HEALTHCHECK`
+  stays responsive under concurrent load.
+- API key comparison used `!=` (timing side-channel on a static bearer
+  token); switched to `hmac.compare_digest`.
+- `DDWF_API_KEY` silently defaulted to a placeholder that's visible in
+  this repo's history — `Settings` now refuses to start with `ENV=production`
+  and the default/short key. **You must set a real
+  `DDWF_API_KEY`** (`openssl rand -hex 32`) before deploying with `ENV=production`.
+- No rate limiting existed at all. Added a basic in-memory limiter
+  (`RATE_LIMIT_PER_MINUTE`, default 60/client) — see
+  `app/core/rate_limit.py`'s docstring for its single-process limitation
+  and the Redis-backed upgrade path if you ever run more than one worker
+  or replica.
+- Unhandled exceptions returned FastAPI's default plain-text 500 with no
+  consistent shape; added a global handler returning stable JSON, plus an
+  `X-Request-ID` response header for correlating a caller's error report
+  with server logs.
+- `CoarseForecastService`'s process-local cache grew forever (one entry
+  per distinct AOI ever queried, no eviction) — now TTL'd (1h) and capped
+  (2000 entries).
+- The container ran as root; now runs as an unprivileged `ddwf` user.
+- `/metrics` was the one unauthenticated route on the service; now behind
+  the same `X-API-Key` check as everything else.
+
+**Still your call before going live:**
+- TLS termination (put this behind a load balancer/ingress that
+  terminates HTTPS — the service itself speaks plain HTTP).
+- Real load testing — the rate limiter's default of 60 req/min/client is a
+  starting guess, not a measured number.
+- If you ever scale to more than one Uvicorn worker or more than one
+  instance, migrate the rate limiter (and ideally the coarse-forecast
+  cache) to Redis — both are documented as single-process-only above.
+- Secrets management — `DDWF_API_KEY` still goes through a plain env var
+  here; fine for Render/Cloud Run's own secret env-var handling, worth
+  revisiting if you adopt a dedicated secrets manager later.
+
 ## The short answer on Render's free tier: no
 
 Render's free web service instance gives you **512MB RAM and 0.1 CPU**.

@@ -23,6 +23,7 @@ docs/TRAINING.md "Option A").
 from __future__ import annotations
 
 import asyncio
+import time
 
 import numpy as np
 
@@ -144,10 +145,21 @@ class CoarseForecastService:
 
     _instance: "CoarseForecastService | None" = None
 
+    # Every distinct (rounded bbox, grid_size, forecast_days) key is a new
+    # dict entry that previously never expired or got evicted -- every
+    # unique AOI any caller ever queried stayed in process memory for the
+    # life of the process. Under real traffic (many distinct AOIs) this is
+    # an unbounded memory leak. TTL matches the actual forecast-cycle
+    # cadence (stale data isn't useful anyway once Open-Meteo's own cycle
+    # rolls over), and a hard cap bounds memory even if TTL churn can't
+    # keep up with request variety.
+    _CACHE_TTL_S = 3600
+    _CACHE_MAX_ENTRIES = 2000
+
     def __init__(self):
         self.settings = get_settings()
         self.client = OpenMeteoClient()
-        self._cache: dict[str, dict] = {}  # simple process-local cache; see cache.py for the Redis pattern
+        self._cache: dict[str, tuple[float, dict]] = {}  # key -> (cached_at, result); see cache.py for the Redis pattern
 
     @classmethod
     def instance(cls) -> "CoarseForecastService":
@@ -160,6 +172,20 @@ class CoarseForecastService:
         rounded = tuple(round(v, 2) for v in bbox)
         return f"{rounded}:{grid_size}:{forecast_days}"
 
+    def _evict_expired(self) -> None:
+        now = time.monotonic()
+        expired = [k for k, (cached_at, _) in self._cache.items() if now - cached_at > self._CACHE_TTL_S]
+        for k in expired:
+            del self._cache[k]
+        if len(self._cache) > self._CACHE_MAX_ENTRIES:
+            # Oldest-first eviction down to the cap; dicts preserve
+            # insertion order in Python 3.7+, and entries are only ever
+            # inserted (never reinserted) by get_coarse_patch below, so
+            # iteration order here is already oldest-first.
+            overflow = len(self._cache) - self._CACHE_MAX_ENTRIES
+            for k in list(self._cache.keys())[:overflow]:
+                del self._cache[k]
+
     async def get_coarse_patch(
         self,
         bbox: tuple[float, float, float, float],
@@ -169,8 +195,12 @@ class CoarseForecastService:
         key = self._cache_key(bbox, grid_size, forecast_days)
         cached = self._cache.get(key)
         if cached is not None:
-            return cached
+            cached_at, result = cached
+            if time.monotonic() - cached_at <= self._CACHE_TTL_S:
+                return result
+            del self._cache[key]
 
         result = await self.client.fetch_coarse_patch(bbox, grid_size=grid_size, forecast_days=forecast_days)
-        self._cache[key] = result
+        self._evict_expired()
+        self._cache[key] = (time.monotonic(), result)
         return result
