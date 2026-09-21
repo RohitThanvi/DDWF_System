@@ -17,6 +17,7 @@ schedules.
 from __future__ import annotations
 
 import json
+from datetime import date
 
 import numpy as np
 import torch
@@ -24,6 +25,7 @@ from torch.utils.data import IterableDataset
 
 from app.data.external_forecast import OPEN_METEO_VARIABLES
 from app.data.normalization import VariableNormalizer
+from app.data.time_features import append_time_features
 from app.models.diffusion_schedule import cosine_noise_schedule  # noqa: F401 -- re-exported for train_downscaler.py
 
 
@@ -79,5 +81,15 @@ class AOIPairDataset(IterableDataset):
             # diffusion process noises/denoises, so it doesn't carry the
             # same scale requirement `target` does.
             tokens = coarse.reshape(coarse.shape[0], -1).T  # (coarse_grid*coarse_grid, n_vars)
+
+            # Append year/season conditioning so the model can actually use
+            # a multi-year manifest's date spread for something -- without
+            # this, every pair looks conditionally identical regardless of
+            # which year it's from. See app/data/time_features.py's
+            # docstring for exactly what this can and can't represent.
+            pair_date = date.fromisoformat(entry["date"])
+            tokens = torch.tensor(
+                append_time_features(tokens.numpy(), pair_date), dtype=torch.float32
+            )
 
             yield coarse, terrain, tokens, target

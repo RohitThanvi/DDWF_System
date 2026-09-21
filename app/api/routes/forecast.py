@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import numpy as np
@@ -29,6 +29,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import verify_api_key
 from app.data.external_forecast import CoarseForecastService
+from app.data.time_features import append_time_features
 from app.services.downscaler import DownscalerService
 from app.services.ensembler import EnsemblerService
 from app.services.terrain_fusion import TerrainFusionService
@@ -84,6 +85,13 @@ async def forecast(req: ForecastRequest) -> ForecastResponse:
         hour_idx = min(day * hours_per_day + 12, coarse_data.shape[0] - 1)
         coarse_patch = coarse_data[hour_idx]  # (n_vars, grid, grid)
         coarse_tokens = coarse_patch.reshape(coarse_patch.shape[0], -1).T  # (grid*grid, n_vars) tokens for cross-attn
+        # Same year/season conditioning the training pipeline appends (see
+        # app/data/time_features.py) -- must be computed identically here
+        # or the model gets a time signal in a different scale/meaning than
+        # what it was trained on. `day` is this timestep's actual lead day,
+        # so its real calendar date (not "today") is what the model needs.
+        forecast_date = (datetime.now(timezone.utc) + timedelta(days=day)).date()
+        coarse_tokens = append_time_features(coarse_tokens, forecast_date)
 
         # downscaler.downscale() is synchronous, CPU-bound PyTorch inference
         # (an n_steps-iteration DDIM sampling loop) -- calling it directly

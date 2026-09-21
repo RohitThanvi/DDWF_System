@@ -102,6 +102,22 @@ before training. As with region-based sampling, **start small** (e.g.
 hours to a large run — a world-scale run makes proportionally more API
 calls for the same reasons as a region-scale one.
 
+**Multi-year date ranges.** `--start-date`/`--end-date` already accept
+any range — pass one spanning several years (e.g.
+`--start-date 2015-01-01 --end-date 2024-12-31`) to sample AOI/dates
+across that whole window. This is only useful because every training
+pair's coarse-forecast tokens now carry year + day-of-year conditioning
+(`app/data/time_features.py`) — without that, a multi-year manifest would
+just be more samples, not samples the model can actually place in time.
+See `docs/ARCHITECTURE.md`'s "Year/season conditioning" note for exactly
+what this does and doesn't let the model represent (seasonal cycle +
+inter-annual trend within the training window; not a climate-model-grade
+projection of future warming). Open-Meteo's historical archive covers
+1940-present, so `--start-date` can go back further than 2015 if you want
+an even wider window — `BASELINE_YEAR`/`YEAR_NORM_DIVISOR` in
+`time_features.py` are just a normalization choice, not a hard limit on
+what dates you can train on.
+
 `AOIPairDataset` in `training/train_downscaler.py` reads this manifest
 directly — no further implementation needed to get training running
 end-to-end; `tests/test_training_data.py` exercises the exact read path

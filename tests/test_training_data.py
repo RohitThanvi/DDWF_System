@@ -40,7 +40,12 @@ def test_aoi_pair_dataset_yields_correct_shapes(small_manifest):
     coarse, terrain, tokens, target = items[0]
     assert coarse.shape == (8, 4, 4)
     assert terrain.shape == (8, 8, 8)
-    assert tokens.shape == (16, 8)   # coarse_grid*coarse_grid tokens, n_vars features each
+    # 16 tokens (coarse_grid*coarse_grid), each n_vars=8 raw features +
+    # TIME_FEATURE_DIM=3 year/season conditioning appended by
+    # app/data/time_features.py -- see that module's docstring for why.
+    from app.data.time_features import TIME_FEATURE_DIM
+
+    assert tokens.shape == (16, 8 + TIME_FEATURE_DIM)
     assert target.shape == (8, 8, 8)
 
 

@@ -4,7 +4,10 @@ model:
   cond_raster_channels: 8
   base_channels: 64
   channel_mults: [1, 2, 4, 8]
-  raw_token_dim: 8          # must match len(OPEN_METEO_VARIABLES) in app/data/external_forecast.py
+  raw_token_dim: 11         # len(OPEN_METEO_VARIABLES)=8 + TIME_FEATURE_DIM=3 (year/season
+                            # conditioning, see app/data/time_features.py). Must match
+                            # app/services/downscaler.py's RAW_TOKEN_DIM -- tests/test_models.py
+                            # asserts these stay in sync.
   context_dim: 64
   time_dim: 256
 

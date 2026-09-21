@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.data.external_forecast import OPEN_METEO_VARIABLES
 from app.data.normalization import VariableNormalizer
+from app.data.time_features import TIME_FEATURE_DIM
 from app.models.diffusion_schedule import cosine_noise_schedule
 from app.models.diffusion_unet import DiffusionDownscaler
 
@@ -19,6 +20,12 @@ log = get_logger(__name__)
 
 DIFFUSION_TRAIN_TIMESTEPS = 1000  # must match training/configs/diffusion_downscaler.yaml: diffusion.train_timesteps
 X0_CLIP_VALUE = 5.0  # clip the predicted x0 to +/-5 (normalized-data std-devs) at every sampling step
+# n weather variables + year/season conditioning (see app/data/time_features.py).
+# training/configs/diffusion_downscaler.yaml's raw_token_dim MUST match this --
+# tests/test_models.py::test_training_config_raw_token_dim_matches_serving is the
+# regression check for that (see app/models/diffusion_schedule.py's docstring
+# for why a train/serve constant like this needs exactly one definition).
+RAW_TOKEN_DIM = len(OPEN_METEO_VARIABLES) + TIME_FEATURE_DIM
 
 
 class DownscalerService:
@@ -27,7 +34,7 @@ class DownscalerService:
     def __init__(self):
         self.settings = get_settings()
         self.device = torch.device(self.settings.device)
-        self.model = DiffusionDownscaler(raw_token_dim=len(OPEN_METEO_VARIABLES))
+        self.model = DiffusionDownscaler(raw_token_dim=RAW_TOKEN_DIM)
         self._load_weights()
         self.model.to(self.device).eval()
         self.alphas_cumprod = cosine_noise_schedule(DIFFUSION_TRAIN_TIMESTEPS).to(self.device)

@@ -2,6 +2,8 @@
 CPU-only — these are architecture smoke tests, not accuracy tests)."""
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import torch
 
@@ -60,14 +62,15 @@ def test_downscaler_service_real_forward_pass():
     between app/data/external_forecast.py's token width and the model's
     configured raw_token_dim (a real bug this test was added to prevent
     regressing)."""
-    from app.services.downscaler import DownscalerService
+    from app.services.downscaler import RAW_TOKEN_DIM, DownscalerService
 
     svc = DownscalerService.__new__(DownscalerService)  # skip __init__'s settings/device boilerplate
     svc.settings = type("S", (), {"diffusion_sampling_steps": 2, "downscaler_checkpoint": "/nonexistent.pt"})()
     svc.device = torch.device("cpu")
     from app.data.external_forecast import OPEN_METEO_VARIABLES
+    from app.data.time_features import append_time_features
 
-    svc.model = DiffusionDownscaler(raw_token_dim=len(OPEN_METEO_VARIABLES), base_channels=8, channel_mults=(1, 2))
+    svc.model = DiffusionDownscaler(raw_token_dim=RAW_TOKEN_DIM, base_channels=8, channel_mults=(1, 2))
 
     from app.models.diffusion_schedule import cosine_noise_schedule
     from app.services.downscaler import DIFFUSION_TRAIN_TIMESTEPS
@@ -81,6 +84,7 @@ def test_downscaler_service_real_forward_pass():
     coarse_patch = torch.randn(len(OPEN_METEO_VARIABLES), 4, 4).numpy()
     terrain_raster = torch.randn(8, 16, 16).numpy()
     coarse_tokens = coarse_patch.reshape(coarse_patch.shape[0], -1).T  # (16, n_vars) — real shape from forecast.py
+    coarse_tokens = append_time_features(coarse_tokens, date(2024, 6, 15))  # -> (16, n_vars + TIME_FEATURE_DIM), same as forecast.py
 
     out = DownscalerService.downscale(svc, coarse_patch, terrain_raster, coarse_tokens, n_channels_out=8, n_steps=2)
     assert out.shape == (8, 16, 16)
@@ -92,3 +96,22 @@ def test_downscaler_service_real_forward_pass():
     # of magnitude beyond any plausible real value) so it only fails if
     # the blowup regresses, not on ordinary variation.
     assert np.abs(out).max() < 10_000
+
+
+def test_training_config_raw_token_dim_matches_serving():
+    """training/configs/diffusion_downscaler.yaml's raw_token_dim and
+    app/services/downscaler.py's RAW_TOKEN_DIM must agree -- if a model is
+    trained against one value and served with the other, every real
+    forecast request would either crash (shape mismatch) or silently feed
+    the model garbage in whichever extra/missing columns exist. This is
+    the same train/serve-mismatch failure mode documented in
+    app/models/diffusion_schedule.py, just for token width instead of the
+    noise schedule."""
+    import yaml
+
+    from app.services.downscaler import RAW_TOKEN_DIM
+
+    with open("training/configs/diffusion_downscaler.yaml") as f:
+        cfg = yaml.safe_load(f)
+
+    assert cfg["model"]["raw_token_dim"] == RAW_TOKEN_DIM

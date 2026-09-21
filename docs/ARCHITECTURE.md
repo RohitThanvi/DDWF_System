@@ -94,6 +94,27 @@ User AOI (lat/lon/bbox) ──▶ Terrain Fusion (DEM+LULC+LST) ───┐   �
   dense `(in, out, modes, modes)` weight is only tractable for small mode
   counts; at `l_max=180` it's tens of GB per block, so `SpectralConv` is
   depthwise with channel-mixing left to the surrounding 1x1 convs.
+- **Year/season conditioning.** Every coarse-forecast token gets 3 extra
+  scalars appended (`app/data/time_features.py`): a linear year signal
+  and a cyclical day-of-year encoding. Without this, training on a
+  multi-year manifest wouldn't actually let the model use the extra
+  time span for anything beyond more/noisier samples — it would have no
+  input telling it *when* a given (coarse, terrain, target) triple is
+  from, so it couldn't represent an AOI's seasonal cycle or any
+  long-run inter-annual trend as a function of time. Training and
+  serving compute this identically (`training/data.py` and
+  `app/api/routes/forecast.py` both call `append_time_features`) for
+  the same train/serve-consistency reason the noise schedule below is a
+  single shared definition.
+  **What this is not:** DDWF is still a short-horizon (<=16-day)
+  downscaler conditioned on Open-Meteo's own forecast for the requested
+  dates — it can learn "this AOI tends to run warmer in later years"
+  from its training window, but it does not mechanistically model
+  climate change or extrapolate future scenarios the way a real climate
+  model (CMIP6-class, driven by emissions pathways) would. If that's
+  the actual goal, it's a materially different, larger project than
+  this downscaler — worth being explicit about rather than overclaiming
+  what a few extra conditioning scalars buy you.
 
 ## Serving-time correctness fixes (found via real end-to-end testing)
 
