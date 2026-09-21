@@ -78,6 +78,30 @@ pairs; each AOI/date makes 3 API calls (2x Open-Meteo archive + 1x
 elevation), so be considerate of Open-Meteo's free-tier fair-use limits
 when scaling.
 
+**Full-world coverage:** pass `--world` instead of `--region` to sample
+AOIs across `WORLD_STRATA` (a hand-picked set of land-heavy regions
+spanning distinct continents/climate zones — see the constant in
+`build_aoi_pairs_manifest.py` for the full list and each region's sampling
+weight) rather than one bbox. A single global bbox sampled uniformly would
+be dominated by ocean (~71% of Earth's surface) and skewed toward small,
+often-frozen boxes near the poles, so `--world` exists specifically to
+avoid that. Every AOI is also checked against real ESA WorldCover water
+fraction *before* any Open-Meteo/MODIS calls are made for it — a
+mostly-ocean draw gets silently resampled rather than burning API budget
+(and rate-limit risk) on a training pair with no real terrain signal:
+```bash
+python scripts/build_aoi_pairs_manifest.py \
+    --world --n-aois 300 \
+    --start-date 2024-01-01 --end-date 2024-06-30 \
+    --out-dir ./data/aoi_pairs_world --manifest-out ./data/aoi_pairs_world_manifest.json
+```
+`inspect_manifest.py` prints a per-stratum pair-count breakdown for any
+manifest built with `--world`, so you can eyeball coverage diversity
+before training. As with region-based sampling, **start small** (e.g.
+`--n-aois 60`, spread thinly across strata) to validate before committing
+hours to a large run — a world-scale run makes proportionally more API
+calls for the same reasons as a region-scale one.
+
 `AOIPairDataset` in `training/train_downscaler.py` reads this manifest
 directly — no further implementation needed to get training running
 end-to-end; `tests/test_training_data.py` exercises the exact read path

@@ -123,6 +123,12 @@ def main() -> None:
     for key, s in shapes.items():
         consistent = "OK (all pairs match)" if len(s) == 1 else f"⚠ INCONSISTENT across pairs: {s}"
         print(f"{key} shapes: {consistent}")
+    strata = [entry.get("stratum") for entry in manifest if entry.get("stratum")]
+    if strata:
+        from collections import Counter
+        print("\nCoverage by stratum (world-coverage manifests only):")
+        for name, count in Counter(strata).most_common():
+            print(f"    {name:22s} {count}")
     if degenerate_pairs:
         print(f"\n⚠ {len(degenerate_pairs)} likely-degenerate pair(s):")
         for p in degenerate_pairs:
