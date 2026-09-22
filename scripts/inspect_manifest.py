@@ -129,6 +129,11 @@ def main() -> None:
         print("\nCoverage by stratum (world-coverage manifests only):")
         for name, count in Counter(strata).most_common():
             print(f"    {name:22s} {count}")
+    sources = {entry.get("source", "open-meteo") for entry in manifest}
+    if len(sources) > 1:
+        print(f"\n⚠ Manifest mixes weather-grid sources across pairs: {sources} "
+              f"-- open-meteo and era5 pairs are not guaranteed to be on identical scales "
+              f"(see app/data/era5_zarr.py's docstring); consider training on one source at a time.")
     if degenerate_pairs:
         print(f"\n⚠ {len(degenerate_pairs)} likely-degenerate pair(s):")
         for p in degenerate_pairs:

@@ -118,6 +118,26 @@ an even wider window — `BASELINE_YEAR`/`YEAR_NORM_DIVISOR` in
 `time_features.py` are just a normalization choice, not a hard limit on
 what dates you can train on.
 
+**Hitting 429s from Open-Meteo on a large run?** The two weather-grid
+fetches (coarse + target) are the dominant request volume — a
+`--world`, multi-year run makes a lot of them. First try slower pacing
+(`--chunk-delay-s 3 --aoi-delay-s 10 --max-retries 10
+--retry-base-delay-s 5`); if that's still not enough, pass `--source
+era5` to stream the same underlying ERA5 reanalysis from Google's free,
+key-less ARCO-ERA5 Zarr store for those two fetches instead of
+Open-Meteo's point API (`pip install -r requirements-train.txt` first —
+it's an optional dependency group). **Read
+`app/data/era5_zarr.py`'s module docstring before trusting this at
+scale** — it documents two real caveats: ERA5's coarser native
+resolution (~28km) versus a small AOI's fine_grid spacing, and an
+unverified-from-this-environment assumption about how
+precipitation/radiation accumulation is presented in this store (no GCS
+network access from this repo's own sandbox to check directly — run one
+small batch and spot-check a value against Open-Meteo before trusting a
+large run's precipitation/radiation channels). Elevation still comes
+from Open-Meteo either way — much lower request volume than the two
+weather grids, and better resolution than ERA5's own orography.
+
 `AOIPairDataset` in `training/train_downscaler.py` reads this manifest
 directly — no further implementation needed to get training running
 end-to-end; `tests/test_training_data.py` exercises the exact read path

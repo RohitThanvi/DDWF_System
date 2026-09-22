@@ -19,6 +19,19 @@ properscoring==0.1          # CRPS
 # since it's used at serving time too, not just training) ---
 pyproj==3.6.1
 
+# --- Optional: --source era5 in build_aoi_pairs_manifest.py (stream ERA5
+# from Google's free ARCO-ERA5 Zarr store instead of Open-Meteo's
+# rate-limited point API). Not needed for the default --source open-meteo
+# path. Versions below are a reasonable recent combo, not verified against
+# the live store from this repo's own environment (no GCS network access
+# here -- see app/data/era5_zarr.py's docstring) -- run one small
+# --source era5 test batch and spot-check the output before trusting a
+# large run, same as the docstring's precipitation/radiation caveat.
+xarray==2024.9.0
+zarr==2.18.3
+gcsfs==2024.9.0.post1
+fsspec==2024.9.0
+
 # --- Optional: SFNO global-engine upgrade path (Option A) ---
 # Not needed for downscaler training (the default, Option B path). Also
 # genuinely fragile cross-platform: xesmf needs the ESMF C library,

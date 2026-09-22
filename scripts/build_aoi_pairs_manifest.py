@@ -49,6 +49,18 @@ rather than the endpoint's actual capacity (Open-Meteo documents 600
 requests/minute, which this script stays well under once paced) — wait a
 few minutes, then retry with a slower pace:
   --chunk-delay-s 3 --aoi-delay-s 10 --max-retries 10 --retry-base-delay-s 5
+
+If 429s persist even with slower pacing (common on a large --world +
+multi-year run — the two weather-grid fetches are the dominant request
+volume), pass --source era5 to stream the same underlying reanalysis from
+Google's free ARCO-ERA5 Zarr store instead of Open-Meteo's point API for
+those two fetches — see app/data/era5_zarr.py's module docstring for what
+this changes (resolution, unit-conversion caveats) before trusting it at
+scale:
+  python scripts/build_aoi_pairs_manifest.py \
+      --world --source era5 --n-aois 300 \
+      --start-date 2015-01-01 --end-date 2024-12-31 \
+      --out-dir ./data/aoi_pairs_world --manifest-out ./data/aoi_pairs_world_manifest.json
 """
 from __future__ import annotations
 
@@ -246,16 +258,34 @@ async def build_manifest(args: argparse.Namespace) -> None:
                     continue  # don't advance i or the AOI budget -- retry with a fresh draw
                 consecutive_ocean_skips = 0
 
-                coarse = await _fetch_historical_grid(
-                    bbox, args.coarse_grid, day, OPEN_METEO_VARIABLES, client,
-                    chunk_delay_s=args.chunk_delay_s, max_retries=args.max_retries,
-                    retry_base_delay_s=args.retry_base_delay_s,
-                )
-                target = await _fetch_historical_grid(
-                    bbox, args.fine_grid, day, OPEN_METEO_VARIABLES, client,
-                    chunk_delay_s=args.chunk_delay_s, max_retries=args.max_retries,
-                    retry_base_delay_s=args.retry_base_delay_s,
-                )
+                if args.source == "era5":
+                    # No await needed: fetch_grid's xarray/zarr calls are
+                    # synchronous, but they're lazy metadata + range-read
+                    # I/O against a remote store (not CPU-bound compute),
+                    # so still worth offloading off the event loop the
+                    # same way terrain fetches already do -- this script
+                    # is sequential either way (one AOI at a time), but
+                    # keeping the pattern consistent matters if this ever
+                    # gets parallelized across AOIs later.
+                    from app.data.era5_zarr import fetch_grid as era5_fetch_grid
+
+                    coarse = await asyncio.to_thread(
+                        era5_fetch_grid, bbox, args.coarse_grid, day, OPEN_METEO_VARIABLES
+                    )
+                    target = await asyncio.to_thread(
+                        era5_fetch_grid, bbox, args.fine_grid, day, OPEN_METEO_VARIABLES
+                    )
+                else:
+                    coarse = await _fetch_historical_grid(
+                        bbox, args.coarse_grid, day, OPEN_METEO_VARIABLES, client,
+                        chunk_delay_s=args.chunk_delay_s, max_retries=args.max_retries,
+                        retry_base_delay_s=args.retry_base_delay_s,
+                    )
+                    target = await _fetch_historical_grid(
+                        bbox, args.fine_grid, day, OPEN_METEO_VARIABLES, client,
+                        chunk_delay_s=args.chunk_delay_s, max_retries=args.max_retries,
+                        retry_base_delay_s=args.retry_base_delay_s,
+                    )
                 elevation = await elevation_client.fetch_elevation_grid(
                     bbox, grid_size=args.fine_grid, chunk_delay_s=args.chunk_delay_s,
                     max_retries=args.max_retries, retry_base_delay_s=args.retry_base_delay_s,
@@ -283,6 +313,7 @@ async def build_manifest(args: argparse.Namespace) -> None:
                 "path": str(pair_path),
                 "bbox": list(bbox),
                 "stratum": stratum_name,
+                "source": args.source,
                 "date": day.isoformat(),
                 "coarse_grid": args.coarse_grid,
                 "fine_grid": args.fine_grid,
@@ -314,6 +345,17 @@ def main() -> None:
     parser.add_argument("--ocean-skip-threshold", type=float, default=0.85,
                          help="Skip (and resample) an AOI whose ESA WorldCover water fraction "
                               "is >= this, before spending any Open-Meteo/MODIS calls on it.")
+    parser.add_argument("--source", choices=["open-meteo", "era5"], default="open-meteo",
+                         help="Where the two weather grids (coarse+target) come from. "
+                              "'open-meteo' (default) hits archive-api.open-meteo.com per AOI/day "
+                              "and is the thing that actually trips rate limiting on a large run. "
+                              "'era5' streams the same underlying reanalysis from Google's free, "
+                              "key-less ARCO-ERA5 Zarr store instead (see app/data/era5_zarr.py's "
+                              "docstring for what this changes and its caveats -- read it before "
+                              "trusting a large run's precipitation/radiation channels). Elevation "
+                              "still comes from Open-Meteo either way (much lower request volume "
+                              "than the two weather grids, and higher-resolution than ERA5's own "
+                              "orography would give).")
     parser.add_argument("--start-date", required=True)
     parser.add_argument("--end-date", required=True)
     parser.add_argument("--n-aois", type=int, default=40)
