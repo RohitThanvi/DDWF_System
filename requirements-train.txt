@@ -29,6 +29,12 @@ pyproj==3.6.1
 # large run, same as the docstring's precipitation/radiation caveat.
 xarray==2024.9.0
 zarr==2.18.3
+numcodecs==0.12.1          # zarr 2.18.3 imports numcodecs.blosc.cbuffer_sizes, which
+                            # numcodecs>=0.13 renamed/removed -- unpinned, pip resolves to
+                            # the latest numcodecs and zarr fails to import at all
+                            # ("cannot import name 'cbuffer_sizes'"). Verified in this
+                            # repo's own sandbox: 0.12.1 imports cleanly against zarr
+                            # 2.18.3; 0.17.0 (latest as of this pin) does not.
 gcsfs==2024.9.0.post1
 fsspec==2024.9.0
 
