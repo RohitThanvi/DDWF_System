@@ -79,6 +79,8 @@ def main() -> None:
 
         n_channels_total = 0
         n_channels_mostly_zero = 0
+        n_terrain_channels_total = 0
+        n_terrain_channels_mostly_zero = 0
 
         for key in ("coarse", "terrain", "target"):
             arr = data[key]
@@ -101,22 +103,48 @@ def main() -> None:
                     print(line)
                     n_channels_total += 1
                     n_channels_mostly_zero += is_mostly_zero
+                    if key == "terrain":
+                        n_terrain_channels_total += 1
+                        n_terrain_channels_mostly_zero += is_mostly_zero
             else:
                 line, is_mostly_zero = _stats(key, arr)
                 print(line)
                 n_channels_total += 1
                 n_channels_mostly_zero += is_mostly_zero
+                if key == "terrain":
+                    n_terrain_channels_total += 1
+                    n_terrain_channels_mostly_zero += is_mostly_zero
 
         # Pair-level rollup: a handful of individually-sparse channels
         # (precipitation on a dry day, a minority LULC class) is normal.
         # Most of a pair's channels being mostly-zero at once is a much
         # stronger, more specific signal that the fetch actually failed
         # for that AOI -- that's the one worth acting on.
+        #
+        # Two separate checks, not one combined fraction: coarse+target
+        # (16 of 24 channels) are real weather data and will almost always
+        # be non-zero, so a fetch failure confined entirely to terrain (8
+        # channels -- elevation/LULC/LST all coming back empty, e.g. an
+        # open-ocean AOI that slipped past build_aoi_pairs_manifest.py's
+        # ocean-skip check) gets diluted well under any reasonable combined
+        # threshold by the 16 legitimately-nonzero weather channels sitting
+        # right next to it. A manifest with real open-ocean pairs in it
+        # would otherwise print "no pairs look degenerate" while a chunk of
+        # its pairs carry zero real terrain-conditioning signal -- exactly
+        # what happened checking a real --world manifest this was written
+        # against.
         frac_mostly_zero = n_channels_mostly_zero / max(n_channels_total, 1)
+        frac_terrain_mostly_zero = n_terrain_channels_mostly_zero / max(n_terrain_channels_total, 1)
         if frac_mostly_zero > 0.75:
             degenerate_pairs.append(path)
             print(f"  ⚠⚠ {n_channels_mostly_zero}/{n_channels_total} channels are >95% zero "
                   f"-- this pair looks largely degenerate, consider excluding it from training")
+        elif frac_terrain_mostly_zero > 0.75:
+            degenerate_pairs.append(path)
+            print(f"  ⚠⚠ {n_terrain_channels_mostly_zero}/{n_terrain_channels_total} TERRAIN channels "
+                  f"are >95% zero (weather data looks fine) -- likely an open-ocean/no-coverage AOI "
+                  f"that slipped past the ocean-skip check; this pair has no real terrain-conditioning "
+                  f"signal, consider excluding it from training")
         print()
 
     print("--- Summary ---")

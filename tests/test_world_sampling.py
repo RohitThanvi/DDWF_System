@@ -76,3 +76,36 @@ async def test_is_mostly_ocean_true_above_threshold():
 async def test_is_mostly_ocean_false_below_threshold():
     client = _FakeLulcClient(water_fraction=0.2)
     assert await _is_mostly_ocean((0, 0, 1, 1), client, water_fraction_threshold=0.85) is False
+
+
+class _FakeUnclassifiedLulcClient:
+    """Stands in for a real open-ocean AOI: ESA WorldCover leaves it
+    entirely unclassified (raw value 0, not its 'water' class 80), so
+    every one of the 4 fraction groups reads 0 -- see this exact case
+    caught against a real --world run, documented in
+    _is_mostly_ocean's docstring."""
+
+    def fetch_lulc_patch(self, bbox, target_size):
+        from app.data.terrain_sources import LULC_GROUP_ORDER
+
+        return np.zeros((len(LULC_GROUP_ORDER), target_size, target_size), dtype=np.float32)
+
+
+@pytest.mark.asyncio
+async def test_is_mostly_ocean_true_for_unclassified_open_ocean():
+    """Regression test for the real failure mode: water_fraction alone is
+    0 here (well under water_fraction_threshold), but classified_fraction
+    is also 0 -- min_classified_fraction must catch this even though the
+    original water-only check would not."""
+    client = _FakeUnclassifiedLulcClient()
+    assert await _is_mostly_ocean(
+        (0, 0, 1, 1), client, water_fraction_threshold=0.85, min_classified_fraction=0.5
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_is_mostly_ocean_false_for_well_classified_land():
+    client = _FakeLulcClient(water_fraction=0.1)  # 0.9 vegetation, 0.1 water -> classified_fraction=1.0
+    assert await _is_mostly_ocean(
+        (0, 0, 1, 1), client, water_fraction_threshold=0.85, min_classified_fraction=0.5
+    ) is False

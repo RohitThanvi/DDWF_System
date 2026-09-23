@@ -102,6 +102,25 @@ before training. As with region-based sampling, **start small** (e.g.
 hours to a large run — a world-scale run makes proportionally more API
 calls for the same reasons as a region-scale one.
 
+**Open-ocean AOIs with empty terrain (found in a real run, now fixed).**
+A real 60-AOI `--world` batch had ~15% of its pairs come back with
+elevation, LULC, *and* LST all completely empty — three independent
+terrain sources, all zero — while the weather data for the same pairs
+looked completely normal. Root cause: ESA WorldCover doesn't classify
+open ocean as its "water" class (that's only for lakes/coastal bays it
+actually maps) — far-from-shore ocean pixels just come back unclassified
+(raw value 0), so the ocean-skip check's `water_fraction` reads as ~0,
+not >= its threshold, and pure open-ocean AOIs sailed straight through.
+Fixed with a second check (`--min-classified-fraction`, default 0.5:
+skip an AOI where less than half its pixels got *any* WorldCover
+classification at all, not just the "water" one) plus a post-fetch
+backstop that skips+resamples if elevation/LULC/LST all come back empty
+regardless of cause. If you're inspecting a manifest built *before* this
+fix, `inspect_manifest.py` now also flags a pair whose terrain channels
+alone are mostly-zero (previously diluted below its threshold by the 16
+legitimately-nonzero weather channels sitting next to them) — re-run it
+against an old manifest to find and exclude any pairs like this.
+
 **Multi-year date ranges.** `--start-date`/`--end-date` already accept
 any range — pass one spanning several years (e.g.
 `--start-date 2015-01-01 --end-date 2024-12-31`) to sample AOI/dates

@@ -133,19 +133,41 @@ def sample_world_aoi(size_deg: float, rng: random.Random) -> tuple[str, tuple[fl
 
 
 async def _is_mostly_ocean(
-    bbox: tuple[float, float, float, float], lulc_client, water_fraction_threshold: float = 0.85
+    bbox: tuple[float, float, float, float], lulc_client,
+    water_fraction_threshold: float = 0.85, min_classified_fraction: float = 0.5,
 ) -> bool:
-    """Cheap land/water gate: reads real ESA WorldCover water-fraction for
+    """Cheap land/water gate: reads real ESA WorldCover class fractions for
     this AOI via a single rasterio range read (no Open-Meteo/MODIS calls
-    involved) and reports whether it's mostly water. Checked *before* the
-    two historical-weather-grid fetches -- those are the actual
-    rate-limited, multi-request-per-AOI cost (see _fetch_historical_grid),
-    so this ordering means a water-heavy AOI never spends that budget."""
+    involved). Checked *before* the two historical-weather-grid fetches --
+    those are the actual rate-limited, multi-request-per-AOI cost (see
+    _fetch_historical_grid), so this ordering means a water/no-coverage
+    AOI never spends that budget.
+
+    Two distinct signals, both meaning "skip this AOI":
+    - `water_fraction_threshold`: WorldCover's "water" class (80) is
+      classified — lakes, rivers, coastal bays WorldCover actually maps.
+    - `min_classified_fraction`: this is the one that matters more in
+      practice. WorldCover does NOT classify open ocean as "water" at
+      all -- far-from-shore ocean pixels come back as raw value 0
+      (unclassified/no-data), which every one of the 4 fraction groups
+      correctly reads as 0. A pure-open-ocean AOI therefore has
+      water_fraction == 0, not >= water_fraction_threshold, and sails
+      straight through the check above -- confirmed against a real run:
+      5 of 34 AOIs in one --world batch had every terrain channel
+      (elevation, LULC, LST -- three independent sources) come back
+      completely zero, and all 5 were pure-open-sea bboxes with no
+      classified pixels at all (see docs/TRAINING.md's note on this).
+      `classified_fraction` (vegetation+built_up+water+bare_or_snow,
+      i.e. "how much of this AOI got any WorldCover classification at
+      all") catches that case directly, regardless of which specific
+      class is missing."""
     from app.data.terrain_sources import LULC_GROUP_ORDER
 
     fractions = await asyncio.to_thread(lulc_client.fetch_lulc_patch, bbox, 16)  # small grid, just for the gate
     water_idx = LULC_GROUP_ORDER.index("water")
-    return float(fractions[water_idx].mean()) >= water_fraction_threshold
+    water_fraction = float(fractions[water_idx].mean())
+    classified_fraction = float(fractions.sum(axis=0).mean())
+    return water_fraction >= water_fraction_threshold or classified_fraction < min_classified_fraction
 
 
 async def _fetch_historical_grid(
@@ -244,7 +266,7 @@ async def build_manifest(args: argparse.Namespace) -> None:
             day = start + timedelta(days=rng.randrange(n_days))
 
             try:
-                if await _is_mostly_ocean(bbox, lulc_client, args.ocean_skip_threshold):
+                if await _is_mostly_ocean(bbox, lulc_client, args.ocean_skip_threshold, args.min_classified_fraction):
                     n_ocean_skipped += 1
                     consecutive_ocean_skips += 1
                     if consecutive_ocean_skips >= MAX_CONSECUTIVE_OCEAN_SKIPS:
@@ -299,6 +321,29 @@ async def build_manifest(args: argparse.Namespace) -> None:
                 i += 1
                 continue
 
+            # Defense-in-depth backstop, separate from the pre-fetch ocean/
+            # no-coverage check above: that check now catches the specific
+            # failure mode found in a real run (open ocean reading as
+            # water_fraction==0, not >=threshold, because WorldCover leaves
+            # it unclassified rather than calling it "water" -- see
+            # _is_mostly_ocean's docstring), but this catches ANY other
+            # reason all three independent terrain sources (elevation,
+            # LULC, LST) might come back empty for the same AOI, without
+            # needing to know the cause. Checked on the raw fetched arrays,
+            # NOT the assembled `terrain` block below -- on perfectly flat
+            # (all-zero) elevation, slope_aspect_from_elevation's aspect
+            # comes back as a uniform 180 (atan2(0,-0)==pi by IEEE
+            # convention), which would make `terrain` look non-empty and
+            # silently defeat this exact check if tested there instead. A
+            # pair with zero real terrain signal is worse than no pair at
+            # all for a terrain-conditioned downscaler -- skip it rather
+            # than writing a degenerate training example.
+            if not (np.any(elevation) or np.any(lulc_fractions) or np.any(lst)):
+                print(f"[{i}] skip (terrain fetch returned entirely empty for bbox={bbox} -- "
+                      f"likely open ocean/no-coverage that slipped past the pre-fetch check)")
+                i += 1
+                continue
+
             approx_width_m = abs(bbox[2] - bbox[0]) * 111_000
             cell_size_m = approx_width_m / max(args.fine_grid - 1, 1)
             slope, aspect = slope_aspect_from_elevation(elevation, cell_size_m=cell_size_m)
@@ -345,6 +390,12 @@ def main() -> None:
     parser.add_argument("--ocean-skip-threshold", type=float, default=0.85,
                          help="Skip (and resample) an AOI whose ESA WorldCover water fraction "
                               "is >= this, before spending any Open-Meteo/MODIS calls on it.")
+    parser.add_argument("--min-classified-fraction", type=float, default=0.5,
+                         help="Skip (and resample) an AOI where less than this fraction of "
+                              "pixels got ANY WorldCover land-cover classification at all -- "
+                              "catches open ocean, which WorldCover leaves unclassified rather "
+                              "than marking as its 'water' class, so --ocean-skip-threshold alone "
+                              "misses it (see _is_mostly_ocean's docstring).")
     parser.add_argument("--source", choices=["open-meteo", "era5"], default="open-meteo",
                          help="Where the two weather grids (coarse+target) come from. "
                               "'open-meteo' (default) hits archive-api.open-meteo.com per AOI/day "
