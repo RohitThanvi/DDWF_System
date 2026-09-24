@@ -34,25 +34,30 @@ per-point REST API. Global, 0.25 degree (~28km) resolution, hourly,
    (nearest-neighbor) client-side instead of relying on Open-Meteo to
    do it server-side.
 
-2. Accumulated-field unit conversion is a best-effort assumption I
-   could not verify against the live store from this environment (no
-   network egress to Google Cloud Storage from this project's sandbox --
-   see the repo's network-allowlist notes). `total_precipitation` and
-   `surface_solar_radiation_downwards` are ERA5 *accumulated* fields;
-   this module assumes ARCO-ERA5's analysis-ready ("ar") tier delivers
-   them as per-hour increments (the convention most ML-training
-   pipelines built on this exact dataset, e.g. GraphCast's, rely on --
-   ARCO-ERA5's own docs describe this tier as "oriented towards common
-   research & ML workflows" and a superset of GraphCast's training
-   data). If that assumption is wrong for this store, the derived
-   precipitation/radiation values would be off by a constant factor
-   (e.g. actually since-00Z-cumulative rather than hourly). **Please
-   spot-check**: pull one grid point's value here and compare it
-   against Open-Meteo's own historical archive for the same
-   lat/lon/hour before trusting a large run's precipitation/radiation
-   channels.
+2. Accumulated-field unit conversion (m -> mm for precipitation, J/m^2 ->
+   W/m^2 for radiation, both assuming ARCO-ERA5's "ar" tier delivers
+   per-hour increments rather than since-00Z-cumulative values) was a
+   best-effort assumption when first written -- since spot-checked
+   against Open-Meteo's own archive for the same lat/lon/hour across
+   three real cases (clear-sky, convective, monsoon; see
+   docs/TRAINING.md's validation note for the actual numbers). No
+   systematic multiplicative bias turned up (a real accumulation-window
+   bug would show as a consistent factor like x3600 or x24 everywhere;
+   what showed up instead was ordinary spatial/temporal noise that
+   scaled with how convective the weather was -- near-exact agreement
+   under clear sky, bigger gaps during active convection/monsoon).
+   Reasonably confident the conversion is right; not exhaustively
+   verified across every climate regime, so a further spot-check never
+   hurts if something looks off downstream.
 
-3. Real network dependency on Google Cloud Storage, separate from
+3. Resolution mismatch (caveat 1 above) is a better explanation for
+   ordinary point-to-point differences than a units bug -- precipitation
+   and radiation are the most spatially patchy of these variables, and a
+   ~28km ERA5 cell vs. a specific interpolated point will disagree more
+   under active weather than in calm/clear conditions regardless of any
+   unit conversion.
+
+4. Real network dependency on Google Cloud Storage, separate from
    Open-Meteo -- run manifest building with `--source era5` from an
    environment with normal internet access (this repo's own CI/sandbox
    environments may not have GCS egress).

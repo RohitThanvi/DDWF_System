@@ -145,17 +145,35 @@ fetches (coarse + target) are the dominant request volume — a
 era5` to stream the same underlying ERA5 reanalysis from Google's free,
 key-less ARCO-ERA5 Zarr store for those two fetches instead of
 Open-Meteo's point API (`pip install -r requirements-train.txt` first —
-it's an optional dependency group). **Read
-`app/data/era5_zarr.py`'s module docstring before trusting this at
-scale** — it documents two real caveats: ERA5's coarser native
-resolution (~28km) versus a small AOI's fine_grid spacing, and an
-unverified-from-this-environment assumption about how
-precipitation/radiation accumulation is presented in this store (no GCS
-network access from this repo's own sandbox to check directly — run one
-small batch and spot-check a value against Open-Meteo before trusting a
-large run's precipitation/radiation channels). Elevation still comes
-from Open-Meteo either way — much lower request volume than the two
-weather grids, and better resolution than ERA5's own orography.
+it's an optional dependency group; also pin `numcodecs==0.12.1`
+specifically — a newer numcodecs breaks zarr 2.18.3's import at
+`numcodecs.blosc.cbuffer_sizes`, a real issue hit and fixed here). Read
+`app/data/era5_zarr.py`'s module docstring for the remaining caveat
+(ERA5's coarser ~28km native resolution vs. a small AOI's finer
+fine_grid spacing — an intrinsic limit, not a bug). Elevation still
+comes from Open-Meteo either way — much lower request volume than the
+two weather grids, and better resolution than ERA5's own orography.
+
+**ERA5 precipitation/radiation unit-conversion, validated against real
+data.** The `m -> mm` / `J/m^2 -> W/m^2` conversions in
+`era5_zarr.py` assume ARCO-ERA5 delivers per-hour increments, not
+since-00Z-cumulative values — spot-checked against Open-Meteo's own
+archive for the same lat/lon/hour across three real cases from an actual
+`--world` manifest:
+
+| Case | temperature_2m | precipitation | shortwave_radiation |
+|---|---|---|---|
+| Clear sky, South Africa (0% cloud) | 31.4°C vs 30.9°C | 0 vs 0 | 1105 vs 1093 W/m² |
+| Convective, Amazon basin | 22.9°C vs 22.3°C | 0.64 vs 0.00 mm | 55 vs 190 W/m² |
+| Monsoon, Kerala (100% cloud) | 22.7°C vs 21.2°C | 1.35 vs 2.50 mm | — |
+
+No consistent multiplicative factor anywhere (a real accumulation-window
+bug would look like a clean x3600 or x24 gap everywhere) — the
+differences scale with how convective/patchy the weather was, near-exact
+under clear sky and bigger during active rain, which is what you'd
+expect from ERA5's ~28km grid cell vs. a specific interpolated point,
+not from a units bug. Reasonably confident the conversion is correct;
+not exhaustively verified across every climate regime.
 
 `AOIPairDataset` in `training/train_downscaler.py` reads this manifest
 directly — no further implementation needed to get training running
